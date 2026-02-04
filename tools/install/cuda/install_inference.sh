@@ -1,41 +1,39 @@
 #!/bin/bash
-# Source dependencies for inference task (CUDA platform)
-#
-# This script is called by install.sh after base and pip requirements.
-# It only handles source dependencies (git repos, etc.)
-#
-# Currently a placeholder - add source dependencies here when needed.
-
-set -euo pipefail
+# Inference task (CUDA): requirements/cuda/inference.txt
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../utils/utils.sh"
+source "$SCRIPT_DIR/../utils/pkg_utils.sh"
 source "$SCRIPT_DIR/../utils/retry_utils.sh"
 
-# Use inherited values or defaults for standalone execution
-PROJECT_ROOT="${PROJECT_ROOT:-$(get_project_root)}"
-RETRY_COUNT="${RETRY_COUNT:-3}"
+PROJECT_ROOT=$(get_project_root)
+DEBUG="${FLAGSCALE_DEBUG:-false}"
+RETRY_COUNT="${FLAGSCALE_RETRY_COUNT:-3}"
+REQ_FILE="$PROJECT_ROOT/requirements/cuda/inference.txt"
 
-install_vllm_lm() {
-    local vllm_dir="$PROJECT_ROOT/vllm-FL"
-    local vllm_url="https://github.com/flagos-ai/vllm-FL.git"
+while [[ $# -gt 0 ]]; do
+    case $1 in --debug) DEBUG=true; shift ;; *) shift ;; esac
+done
 
-    log_info "Installing vllm-FL"
-
-    # Clone repository
-    retry_git_clone "$vllm_url" "$vllm_dir" "$RETRY_COUNT"
-
-    # Install from source
-    cd "$vllm_dir"
-    retry "$RETRY_COUNT" "pip install . -vvv"
-    cd "$PROJECT_ROOT"
-
-    log_success "vllm-FL installed"
+install_pip() {
+    if is_phase_enabled task; then
+        [ ! -f "$REQ_FILE" ] && { log_info "inference.txt not found"; return 0; }
+        set_step "Installing inference requirements"
+        retry_pip_install -d $DEBUG "$REQ_FILE" "$RETRY_COUNT" || return 1
+        log_success "Inference requirements installed"
+    else
+        local pkgs=$(get_pip_deps_for_requirements "$REQ_FILE")
+        [ -z "$pkgs" ] && return 0
+        set_step "Installing inference pip packages (override)"
+        run_cmd -d $DEBUG $(get_pip_cmd) install --root-user-action=ignore $pkgs || return 1
+        log_success "Inference pip packages installed"
+    fi
 }
 
 main() {
-    log_step "Installing source dependencies for inference task"
-    install_vllm_lm
+    install_pip || die "Inference pip failed"
+    # No source deps for inference task yet
+    # To add: SRC_DEPS_LIST="dep1 dep2" and install_src function
 }
 
-main "$@"
+main
