@@ -18,6 +18,8 @@ experiment:
     no_shared_fs: false
     rdzv_backend: static
     hostfile: null
+    deploy:
+      use_fs_serve: true
   cmds:
     before_start: echo "Starting PI0 Training"
   envs:
