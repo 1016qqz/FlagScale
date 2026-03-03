@@ -19,20 +19,20 @@ conda create -n flagscale-inference python=3.12
 conda activate flagscale-inference
 ```
 
-Install FlagScale:
+### Install FlagScale
 
 ```sh
 cd FlagScale/
-pip install . --verbose
+pip install ".[cuda]"
 ```
 
-### Install vLLM and Transformers
+### Install vllm-plugin-FL
+
+Follow Setup in the vllm-plugin-FL [setup guide](https://github.com/flagos-ai/vllm-plugin-FL?tab=readme-ov-file#setup).
+
+### Install Transformers
 
 ```sh
-git clone https://github.com/flagos-ai/vllm-FL.git
-cd vllm-FL
-pip install packaging==24.2
-pip install --no-build-isolation .
 pip install transformers==4.57.0
 ```
 
@@ -71,7 +71,7 @@ Change 2 fields:
 ### Run Inference
 
 ```sh
-python run.py --config-path ./examples/robobrain2_5/conf --config-name inference action=run
+flagscale run --config-path ./examples/robobrain2_5/conf --config-name inference action=run
 ```
 
 ### Check Logs
@@ -98,7 +98,7 @@ Change 1 fields:
 
 ```sh
 cd FlagScale/
-python run.py --config-path ./examples/robobrain2_5/conf --config-name serve action=run
+flagscale run --config-path ./examples/robobrain2_5/conf --config-name serve action=run
 ```
 
 ## Test Server with CURL

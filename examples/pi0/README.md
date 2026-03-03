@@ -24,8 +24,8 @@ Install FlagScale and robotics dependencies:
 
 ```sh
 cd FlagScale/
-pip install . --verbose
-pip install -r requirements/train/robotics/requirements.txt
+pip install ".[cuda]"
+pip install git+https://github.com/huggingface/transformers.git@fix/lerobot_openpi
 ```
 
 Install additional dependencies for downloading models/datasets:
@@ -181,7 +181,7 @@ Configure the following fields:
 ### Start Training
 ```sh
 cd FlagScale/
-python run.py --config-path ./examples/pi0/conf --config-name train action=run
+flagscale run --config-path examples/pi0/conf --config-name train action=run
 ```
 
 Training logs are saved to `outputs/pi0_train/logs/host_0_localhost.output` by default.
@@ -191,7 +191,7 @@ Checkpoints are saved to `${experiment.exp_dir}/checkpoints` (default: `outputs/
 ### Stop Training
 ```sh
 cd FlagScale/
-python run.py --config-path ./examples/pi0/conf --config-name train action=stop
+flagscale run --config-path ./examples/pi0/conf --config-name train action=stop
 ```
 
 ## Inference
@@ -270,8 +270,8 @@ Configure the following fields:
 
 ```sh
 cd FlagScale/
-python run.py \
-    --config-path ./examples/pi0/conf \
+flagscale run \
+    --config-path examples/pi0/conf \
     --config-name inference \
     action=run
 ```
@@ -312,7 +312,7 @@ Configure the following fields:
 
 ```sh
 cd FlagScale/
-python run.py --config-path ./examples/pi0/conf --config-name serve action=run
+flagscale run --config-path ./examples/pi0/conf --config-name serve action=run
 ```
 
 Serving logs are saved to `outputs/pi0_serve/logs/host_0_localhost.output` by default.
@@ -321,7 +321,7 @@ Serving logs are saved to `outputs/pi0_serve/logs/host_0_localhost.output` by de
 
 ```sh
 cd FlagScale/
-python run.py --config-path ./examples/pi0/conf --config-name serve action=stop
+flagscale run --config-path ./examples/pi0/conf --config-name serve action=stop
 ```
 
 ### Test Server with Client
