@@ -23,7 +23,7 @@ conda activate flagscale-inference
 
 ```sh
 cd FlagScale/
-pip install ".[cuda]"
+pip install ".[cuda-train]"
 ```
 
 ### Install vllm-plugin-FL
