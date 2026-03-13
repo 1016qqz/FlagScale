@@ -16,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,16 @@ def _build_eagle_processor(tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS
             "Vendor files are copied during model creation. Create the policy/model first, "
             "or call ensure_eagle_cache_ready() before building processors."
         )
+
+    # Clear stale HF modules cache so transformers re-copies from our patched vendored source.
+    from transformers.dynamic_module_utils import HF_MODULES_CACHE
+    hf_modules_dir = Path(HF_MODULES_CACHE) / "transformers_modules"
+    repo_name = tokenizer_assets_repo.split("/")[-1]
+    sanitized = repo_name.replace("-", "_hyphen_")
+    stale_cache = hf_modules_dir / sanitized
+    if stale_cache.exists():
+        shutil.rmtree(stale_cache)
+
     proc = AutoProcessor.from_pretrained(
         str(cache_dir), trust_remote_code=True, use_fast=True, local_files_only=True,
     )

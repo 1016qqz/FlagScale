@@ -19,9 +19,7 @@ from transformers.image_processing_utils_fast import (
 try:
     from transformers.image_processing_utils_fast import ImagesKwargs
 except ImportError:
-    from typing import TypedDict
-    class ImagesKwargs(TypedDict, total=False):
-        pass
+    from transformers.image_processing_utils_fast import DefaultFastImageProcessorKwargs as ImagesKwargs
 from transformers.image_utils import (
     IMAGENET_STANDARD_MEAN,  # 0.5, 0.5, 0.5
     IMAGENET_STANDARD_STD,  # 0.5, 0.5, 0.5

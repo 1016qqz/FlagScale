@@ -35,6 +35,7 @@ from flagscale.models.vla.action_model.gr00t_action_header import (
     FlowmatchingActionHeadConfig,
     MultiEmbodimentActionEncoder,
 )
+from flagscale.models.utils.constants import HF_LEROBOT_HOME
 
 try:
     import tree
@@ -43,7 +44,6 @@ except ImportError:
 
 DEFAULT_VENDOR_EAGLE_PATH = str((Path(__file__).resolve().parent / "eagle2_hg_model").resolve())
 DEFAULT_TOKENIZER_ASSETS_REPO = "lerobot/eagle2hg-processor-groot-n1p5"
-HF_LEROBOT_HOME = Path.home() / ".cache" / "lerobot"
 
 BACKBONE_FEATURE_KEY = "backbone_features"
 ACTION_KEY = "action_pred"
@@ -385,12 +385,10 @@ class FlowmatchingActionHead(nn.Module):
         future_tokens = self.future_tokens.weight.unsqueeze(0).expand(vl_embs.shape[0], -1, -1)
         sa_embs = torch.cat((state_features, future_tokens, action_features), dim=1)
 
-        vl_attn_mask = backbone_output.backbone_attention_mask
-
         model_output = self.model(
             hidden_states=sa_embs,
             encoder_hidden_states=vl_embs,
-            encoder_attention_mask=vl_attn_mask,
+            encoder_attention_mask=None,
             timestep=t_discretized,
             return_all_hidden_states=False,  # NOTE (YL): not using flare now
         )
