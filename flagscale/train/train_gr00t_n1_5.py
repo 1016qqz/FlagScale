@@ -423,6 +423,10 @@ def main(config: TrainConfig, seed: int):
                 **policy.output_features,
             },
         },
+        "groot_pack_inputs": {
+            "stats": dataset.meta.stats,
+            "normalize_min_max": True,
+        },
     }
 
     num_workers = config.system.num_workers
@@ -467,6 +471,10 @@ def main(config: TrainConfig, seed: int):
                     **policy.output_features,
                 },
             },
+            "groot_action_unpack_unnormalize": {
+                "stats": dataset.meta.stats,
+                "normalize_min_max": True,
+            },
         }
         postprocessor = make_preprocessor_from_config(
             postprocessor_config, overrides=postprocessor_overrides
@@ -484,6 +492,8 @@ def main(config: TrainConfig, seed: int):
     optimizer, lr_scheduler = setup_optimizer_and_scheduler(policy, config)
 
     dist.barrier()
+
+    policy.train()
 
     train_metrics = {
         "loss": AverageMeter("loss", ":.3f"),
