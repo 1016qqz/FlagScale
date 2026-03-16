@@ -14,6 +14,7 @@ experiment:
     backend: native
     entrypoint: flagscale/train/train_pi.py
   runner:
+    nproc_per_node: 4
     per_node_task: false
     no_shared_fs: false
     rdzv_backend: static
@@ -22,8 +23,7 @@ experiment:
     before_start: echo "Starting PI0 Training"
   envs:
     LOGLEVEL: "INFO"
-    CUDA_VISIBLE_DEVICES: "0,1,2,3"
-    CUDA_DEVICE_MAX_CONNECTIONS: 1
+    ASCEND_RT_VISIBLE_DEVICES: "0,1,2,3"
     WANDB_MODE: offline
     OTEL_SDK_DISABLED: true
 
