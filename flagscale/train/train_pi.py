@@ -18,6 +18,7 @@ from contextlib import nullcontext
 from omegaconf import OmegaConf
 import numpy as np
 import torch
+import torch_npu
 import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
@@ -66,19 +67,13 @@ def set_seed(seed: int):
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-    torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.npu.manual_seed_all(seed)
 
 
 def init_ddp():
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group(backend="nccl", init_method="env://")
+    torch.npu.set_device(local_rank)
+    torch.distributed.init_process_group(backend="hccl", init_method="env://")
 
     return local_rank
 
@@ -291,7 +286,7 @@ def make_policy(
     kwargs["pretrained_name_or_path"] = cfg.pretrained_path
     policy = policy_cls.from_pretrained(cfg.pretrained_path, config=cfg)
 
-    policy.to(cfg.device)
+    policy.to(device=cfg.device, dtype=torch.bfloat16)
     assert isinstance(policy, torch.nn.Module)
 
     # policy = torch.compile(policy, mode="reduce-overhead")
@@ -472,7 +467,7 @@ def update_policy(
     policy_model = policy.module if isinstance(policy, DDP) else policy
     use_amp = getattr(policy_model.config, "use_amp", False)
 
-    autocast_context = torch.amp.autocast("cuda", dtype=torch.bfloat16) if use_amp else nullcontext()
+    autocast_context = torch.amp.autocast("npu", dtype=torch.bfloat16) if use_amp else nullcontext()
     with autocast_context:
         loss, _= policy.forward(batch)
     # TODO(rcadene): policy.unnormalize_outputs(out_dict)
@@ -545,7 +540,7 @@ def main(config: TrainConfig, seed: int):
     policy_config.use_amp = config.system.use_amp
 
     local_rank = init_ddp()
-    device = torch.device("cuda", local_rank)
+    device = torch.device("npu", local_rank)
     rank = dist.get_rank()
     is_main_process = rank == 0 and local_rank == 0
     policy_config.device = device

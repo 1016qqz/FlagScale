@@ -5,7 +5,7 @@ engine:
   tokenizer: /workspace/models/google/paligemma-3b-pt-224
   # TODO: (yupu) Use the stat safetensors
   stat_path: /workspace/datasets/lerobot/aloha_mobile_cabinet/meta/stats.json
-  device: "cuda"
+  device: "npu:8"
   # By default, Pi0.5 uses quantiles for state and action normalization, if false, it uses mean and std instead
   use_quantiles: false
 

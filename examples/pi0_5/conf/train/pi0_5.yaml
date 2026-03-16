@@ -5,7 +5,7 @@ system:
   grad_clip_norm: 1.0
   use_amp: false
   shuffle: false
-  num_workers: 4
+  num_workers: 0
 
   checkpoint:
     output_directory: ${experiment.exp_dir}
