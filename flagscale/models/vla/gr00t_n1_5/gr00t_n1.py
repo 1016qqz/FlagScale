@@ -23,7 +23,7 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError
 from torch import nn
 from torch.distributions import Beta
-from transformers import AutoConfig, AutoModel, PretrainedConfig, PreTrainedModel
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.feature_extraction_utils import BatchFeature
 
 from flagscale.models.vla.action_model.flow_matching_head.cross_attention_dit import (
@@ -116,7 +116,9 @@ class EagleBackbone(nn.Module):
         super().__init__()
         assert not reproject_vision, "Reproject vision is not implemented here, set to False"
 
-        # Prefer loading Eagle model config from the cache directory where vendor files were copied.
+        from flagscale.models.vla.gr00t_n1_5.eagle2_hg_model.configuration_eagle2_5_vl import Eagle25VLConfig
+        from flagscale.models.vla.gr00t_n1_5.eagle2_hg_model.modeling_eagle2_5_vl import Eagle25VLForConditionalGeneration
+
         vendor_dir = DEFAULT_VENDOR_EAGLE_PATH
         cache_dir = HF_LEROBOT_HOME / tokenizer_assets_repo
         try:
@@ -124,8 +126,8 @@ class EagleBackbone(nn.Module):
         except Exception as exc:  # nosec: B110
             print(f"[GROOT] Warning: failed to prepare Eagle cache for backbone: {exc}")
 
-        config = AutoConfig.from_pretrained(str(cache_dir), trust_remote_code=True)
-        self.eagle_model = AutoModel.from_config(config, trust_remote_code=True)
+        config = Eagle25VLConfig.from_pretrained(str(cache_dir))
+        self.eagle_model = Eagle25VLForConditionalGeneration(config)
 
         if project_to_dim is not None:
             self.eagle_linear = torch.nn.Linear(2048, project_to_dim)
