@@ -10,6 +10,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+from accelerate import Accelerator
+from accelerate.utils import DistributedDataParallelKwargs
 from omegaconf import OmegaConf, DictConfig
 import numpy as np
 import torch
@@ -40,6 +42,7 @@ from flagscale.train.utils.train_utils import (
     update_last_checkpoint,
 )
 from flagscale.train.utils.optim_setup import setup_optimizer_and_scheduler
+from flagscale.train.utils.debug_hooks import DebugHooks
 from flagscale.models.vla.gr00t_n1_5 import Gr00tN15
 import flagscale.models.vla.gr00t_n1_5.processor_gr00t  # noqa: F401  register GR00T processor steps
 
@@ -85,7 +88,7 @@ def make_dataset(cfg: DataConfig):
     # TODO: (yupu) Remove hard-coded video backend
     # After not much testing, It feels like that `torchcodec` is more robust than `pyav`
     # `pyav` crashes sometimes
-    video_backend = "torchcodec"
+    video_backend = "pyav"
 
     # Leave the revision to None
     ds_meta = LeRobotDatasetMetadata(root=cfg.data_path, revision=None)
@@ -338,6 +341,7 @@ def update_policy(
     grad_clip_norm: float,
     lr_scheduler=None,
     lock=None,
+    accelerator=None,
 ) -> MetricsTracker:
     """
     Performs a single training step to update the policy's weights.
@@ -354,6 +358,8 @@ def update_policy(
         grad_clip_norm: The maximum norm for gradient clipping.
         lr_scheduler: An optional learning rate scheduler.
         lock: An optional lock for thread-safe optimizer updates.
+        accelerator: Optional Accelerator instance. When provided, uses Accelerate
+            for autocast, backward, and gradient clipping instead of manual calls.
 
     Returns:
         The updated MetricsTracker with new statistics for this step.
@@ -362,19 +368,30 @@ def update_policy(
 
     optimizer.zero_grad()
 
-    autocast_context = (
-        torch.amp.autocast("cuda", dtype=torch.bfloat16) if use_amp else nullcontext()
-    )
+    if accelerator is not None:
+        autocast_context = accelerator.autocast() if use_amp else nullcontext()
+    else:
+        autocast_context = (
+            torch.amp.autocast("cuda", dtype=torch.bfloat16) if use_amp else nullcontext()
+        )
+
     with autocast_context:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         output = policy(batch)
         loss = output["loss"]
 
-    loss.backward()
+    if accelerator is not None:
+        accelerator.backward(loss)
+    else:
+        loss.backward()
 
     # Clip gradients (torch.nn.utils.clip_grad_norm_ works with DTensors in PyTorch ≥2.6)
-    grad_norm = torch.nn.utils.clip_grad_norm_(
-        policy.parameters(), grad_clip_norm if grad_clip_norm > 0 else float("inf")
-    )
+    clip_value = grad_clip_norm if grad_clip_norm > 0 else float("inf")
+    if accelerator is not None:
+        grad_norm = accelerator.clip_grad_norm_(policy.parameters(), clip_value)
+    else:
+        grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), clip_value)
 
     with lock if lock is not None else nullcontext():
         optimizer.step()
@@ -398,20 +415,38 @@ def update_policy(
 def main(config: TrainConfig, seed: int):
     set_seed(seed)
 
-    # --- Distributed init ---
-    dist.init_process_group(backend="nccl")
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    device = torch.device("cuda", local_rank)
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-    is_main_process = rank == 0
+    USE_ACCELERATE = True
+
+    if USE_ACCELERATE:
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+        accelerator = Accelerator(
+            step_scheduler_with_optimizer=False,
+            kwargs_handlers=[ddp_kwargs],
+        )
+        device = accelerator.device
+        is_main_process = accelerator.is_main_process
+        world_size = accelerator.num_processes
+    else:
+        dist.init_process_group(backend="nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        is_main_process = rank == 0
+        accelerator = None
 
     dataset = make_dataset(config.data)
-    dist.barrier()
+    if accelerator is not None:
+        accelerator.wait_for_everyone()
+    else:
+        dist.barrier()
 
     policy = make_policy(config=config, ds_meta=dataset.meta)
-    dist.barrier()
+    if accelerator is not None:
+        accelerator.wait_for_everyone()
+    else:
+        dist.barrier()
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
     preprocessor_overrides = {
@@ -432,25 +467,37 @@ def main(config: TrainConfig, seed: int):
     num_workers = config.system.num_workers
     shuffle = config.system.shuffle
 
-    # DistributedSampler ensures each rank gets different data
-    sampler = torch.utils.data.distributed.DistributedSampler(
-        dataset,
-        num_replicas=world_size,
-        rank=rank,
-        shuffle=shuffle,
-        drop_last=False,
-    )
+    if USE_ACCELERATE:
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            num_workers=num_workers,
+            batch_size=config.system.batch_size,
+            shuffle=shuffle,
+            pin_memory=True,
+            drop_last=False,
+            prefetch_factor=2 if num_workers > 0 else None,
+        )
+        sampler = None
+    else:
+        # DistributedSampler ensures each rank gets different data
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=shuffle,
+            drop_last=False,
+        )
 
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        num_workers=num_workers,
-        batch_size=config.system.batch_size,
-        shuffle=False,  # Must be False when using sampler
-        sampler=sampler,
-        pin_memory=True,
-        drop_last=False,
-        prefetch_factor=2 if num_workers > 0 else None,
-    )
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            num_workers=num_workers,
+            batch_size=config.system.batch_size,
+            shuffle=False,  # Must be False when using sampler
+            sampler=sampler,
+            pin_memory=True,
+            drop_last=False,
+            prefetch_factor=2 if num_workers > 0 else None,
+        )
 
     # Setup preprocessor
     preprocessor = None
@@ -480,20 +527,33 @@ def main(config: TrainConfig, seed: int):
             postprocessor_config, overrides=postprocessor_overrides
         )
 
-    dl_iter = cycle(dataloader)
     num_frames = dataset.num_frames
     num_episodes = dataset.num_episodes
 
-    # --- Apply FSDP2 ---
-    device_mesh = init_device_mesh("cuda", (world_size,))
-    apply_fsdp2(policy, device_mesh)
+    if USE_ACCELERATE:
+        optimizer, lr_scheduler = setup_optimizer_and_scheduler(policy, config)
+        policy, optimizer, dataloader, lr_scheduler = accelerator.prepare(
+            policy, optimizer, dataloader, lr_scheduler,
+        )
+    else:
+        # --- Apply FSDP2 ---
+        device_mesh = init_device_mesh("cuda", (world_size,))
+        apply_fsdp2(policy, device_mesh)
 
-    # Setup optimizer and scheduler (applies freeze config internally)
-    optimizer, lr_scheduler = setup_optimizer_and_scheduler(policy, config)
+        # Setup optimizer and scheduler (applies freeze config internally)
+        optimizer, lr_scheduler = setup_optimizer_and_scheduler(policy, config)
 
-    dist.barrier()
+    dl_iter = cycle(dataloader)
 
-    policy.train()
+    if accelerator is not None:
+        accelerator.wait_for_everyone()
+    else:
+        dist.barrier()
+
+    policy.eval()
+
+    debug_hooks = DebugHooks(policy, print_fn=logger.info)
+    debug_hooks.register()
 
     train_metrics = {
         "loss": AverageMeter("loss", ":.3f"),
@@ -515,10 +575,10 @@ def main(config: TrainConfig, seed: int):
         initial_step=step,
     )
 
-    # Ensures proper data shuffling across epochs in distributed training
-    epoch = 0
-    samples_per_epoch = num_frames // effective_batch_size
-    sampler.set_epoch(epoch)
+    if sampler is not None:
+        epoch = 0
+        samples_per_epoch = num_frames // effective_batch_size
+        sampler.set_epoch(epoch)
 
     for _ in range(step, config.system.train_steps):
         start_time = time.perf_counter()
@@ -541,30 +601,36 @@ def main(config: TrainConfig, seed: int):
             use_amp=config.system.use_amp,
             grad_clip_norm=config.system.grad_clip_norm,
             lr_scheduler=lr_scheduler,
+            accelerator=accelerator,
         )
 
         step += 1
         train_tracker.step()
 
         # Update epoch counter for sampler.set_epoch() when we've processed one epoch worth of samples
-        # This ensures proper data shuffling across epochs in distributed training
-        if samples_per_epoch > 0 and step % samples_per_epoch == 0:
-            epoch += 1
-            sampler.set_epoch(epoch)
+        if sampler is not None:
+            if samples_per_epoch > 0 and step % samples_per_epoch == 0:
+                epoch += 1
+                sampler.set_epoch(epoch)
 
         if step % config.system.log_freq == 0:
-            logger.info(f"step: {step} {format_train_tracker_step(train_tracker)}")
+            rank = dist.get_rank() if dist.is_initialized() else 0
+            logger.info(f"[Rank {rank}] step: {step} {format_train_tracker_step(train_tracker)}")
             train_tracker.reset_averages()
 
         if (
             config.system.checkpoint.save_checkpoint
             and step % config.system.checkpoint.save_freq == 0
         ):
-            dist.barrier()
-
-            # get_model_state_dict is a collective — all ranks must call it
-            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-            state_dict = get_model_state_dict(policy, options=options)
+            if accelerator is not None:
+                accelerator.wait_for_everyone()
+                unwrapped_policy = accelerator.unwrap_model(policy)
+                state_dict = unwrapped_policy.state_dict()
+            else:
+                dist.barrier()
+                # get_model_state_dict is a collective — all ranks must call it
+                options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+                state_dict = get_model_state_dict(policy, options=options)
 
             if is_main_process:
                 logger.info(f"Saving checkpoint at step {step}")
@@ -573,10 +639,11 @@ def main(config: TrainConfig, seed: int):
                     output_dir, config.system.train_steps, step
                 )
                 pretrained_dir = checkpoint_dir / PRETRAINED_MODEL_DIR
-                policy.save_pretrained_artifacts(pretrained_dir)
+                saving_policy = accelerator.unwrap_model(policy) if accelerator is not None else policy
+                saving_policy.save_pretrained_artifacts(pretrained_dir)
                 ckpt_config = OmegaConf.merge(
                     config.to_omegaconf(),
-                    policy.checkpoint_config_overrides(),
+                    saving_policy.checkpoint_config_overrides(),
                 )
                 save_vla_checkpoint(
                     checkpoint_dir=checkpoint_dir,
@@ -587,13 +654,19 @@ def main(config: TrainConfig, seed: int):
                 )
                 update_last_checkpoint(checkpoint_dir)
 
-            dist.barrier()
+            if accelerator is not None:
+                accelerator.wait_for_everyone()
+            else:
+                dist.barrier()
 
     if is_main_process:
         logger.info("Training completed")
 
-    dist.barrier()
-    dist.destroy_process_group()
+    if accelerator is not None:
+        accelerator.wait_for_everyone()
+    else:
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

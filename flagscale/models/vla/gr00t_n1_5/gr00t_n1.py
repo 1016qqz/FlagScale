@@ -56,6 +56,7 @@ def ensure_eagle_cache_ready(vendor_dir: Path, cache_dir: Path, assets_repo: str
     """Populate the Eagle processor directory in cache and ensure tokenizer assets exist.
 
     - Copies the vendored Eagle files into cache_dir (overwriting when needed).
+    - Also refreshes the transformers dynamic module cache to avoid stale imports.
     - Downloads vocab.json and merges.txt into the same cache_dir if missing.
     """
     cache_dir = Path(cache_dir)
@@ -67,6 +68,24 @@ def ensure_eagle_cache_ready(vendor_dir: Path, cache_dir: Path, assets_repo: str
         copytree(vendor_dir, cache_dir, dirs_exist_ok=True)
     except Exception as exc:  # nosec: B110
         print(f"[GROOT] Warning: Failed to copy vendor Eagle files to cache: {exc}")
+
+    # Also refresh the transformers dynamic module cache.
+    # AutoProcessor.from_pretrained(trust_remote_code=True) imports Python files from
+    # HF_HOME/modules/transformers_modules/<sanitized_name>/, which is separate from
+    # cache_dir. If HF_LEROBOT_HOME != HF_HOME/lerobot, this module cache can become
+    # stale after vendored files are updated. Propagate here to keep them in sync.
+    try:
+        from huggingface_hub.constants import HF_HOME as _hf_home
+        sanitized = str(cache_dir.name).replace("-", "_hyphen_").replace(".", "_dot_")
+        # Walk up to find the repo-like directory name (e.g. "eagle2hg-processor-groot-n1p5")
+        repo_name = assets_repo.replace("/", "_hyphen_")
+        sanitized = repo_name.replace("-", "_hyphen_").replace(".", "_dot_")
+        tf_module_dir = Path(_hf_home) / "modules" / "transformers_modules" / sanitized
+        if tf_module_dir.exists() and tf_module_dir != cache_dir:
+            copytree(vendor_dir, tf_module_dir, dirs_exist_ok=True)
+            print(f"[GROOT] Also refreshed transformers module cache: {tf_module_dir}")
+    except Exception as exc:
+        print(f"[GROOT] Warning: Could not refresh transformers module cache: {exc}")
 
     required_assets = [
         "vocab.json",

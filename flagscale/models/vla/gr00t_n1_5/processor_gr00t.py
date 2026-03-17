@@ -16,9 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import shutil
 from dataclasses import dataclass, field
-from filelock import FileLock
 from pathlib import Path
 from typing import Any
 
@@ -57,21 +55,9 @@ def _build_eagle_processor(tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS
             "or call ensure_eagle_cache_ready() before building processors."
         )
 
-    # Clear stale HF modules cache so transformers re-copies from our patched vendored source.
-    # Use a filelock to prevent multi-rank races on the shared cache directory.
-    from transformers.dynamic_module_utils import HF_MODULES_CACHE
-    hf_modules_dir = Path(HF_MODULES_CACHE) / "transformers_modules"
-    repo_name = tokenizer_assets_repo.split("/")[-1]
-    sanitized = repo_name.replace("-", "_hyphen_")
-    stale_cache = hf_modules_dir / sanitized
-    lock_path = hf_modules_dir / f".{sanitized}.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with FileLock(lock_path):
-        if stale_cache.exists():
-            shutil.rmtree(stale_cache)
-        proc = AutoProcessor.from_pretrained(
-            str(cache_dir), trust_remote_code=True, use_fast=True, local_files_only=True,
-        )
+    proc = AutoProcessor.from_pretrained(
+        str(cache_dir), trust_remote_code=True, use_fast=True, local_files_only=True,
+    )
     proc.tokenizer.padding_side = "left"
     return proc
 
