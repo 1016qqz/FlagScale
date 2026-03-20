@@ -31,16 +31,11 @@ class FreezeConfig(BaseModel):
 class SchedulerConfig(BaseModel):
     """Learning rate scheduler configuration.
 
-    Uses transformers scheduler types when `name` is set. See transformers.SchedulerType for options:
-    linear, cosine, cosine_with_restarts, polynomial, constant,
-    constant_with_warmup, inverse_sqrt, cosine_with_min_lr, etc.
-
-    Example:
-        scheduler:
-          name: cosine
-          warmup_steps: 1000
-          scheduler_kwargs:
-            min_lr: 1e-6
+    Supports two modes:
+    - name="cosine_decay_with_warmup": Built-in cosine decay with auto-scaling (from lerobot).
+      Uses warmup_steps, decay_steps, peak_lr, decay_lr.
+    - Any other name: Delegates to transformers.get_scheduler().
+      Uses warmup_steps, scheduler_kwargs.
 
     For backward compatibility with pi0/pi0.5, the legacy fields (decay_steps, decay_lr) are kept.
     """
@@ -49,9 +44,10 @@ class SchedulerConfig(BaseModel):
     warmup_steps: int = 1000
     scheduler_kwargs: dict[str, Any] | None = None
 
-    # Legacy fields for pi0/pi0.5 backward compatibility
+    # Used by cosine_decay_with_warmup and legacy pi0/pi0.5
     decay_steps: int = 30000
     decay_lr: float = 2.5e-6
+    peak_lr: float | None = None
 
 
 class OptimizerConfig(BaseModel):
@@ -167,6 +163,7 @@ class DataConfig(BaseModel):
 
     model_config = {"extra": "allow", "arbitrary_types_allowed": True}
 
+    dataset_type: str = "lerobot"
     data_path: str = Field(..., description="Path to training dataset")
     tolerance_s: float = 0.0001
     use_imagenet_stats: bool = True
@@ -197,7 +194,7 @@ class ModelConfig(BaseModel):
 
     model_config = {
         "extra": "allow",
-        "arbitrary_types_allowed": True
+        "arbitrary_types_allowed": True,
     }
 
     # Required fields to identify which model and checkpoint to use
@@ -218,7 +215,7 @@ class ModelConfig(BaseModel):
     @field_validator("model_name")
     @classmethod
     def validate_model_name(cls, v):
-        valid_names = {"pi0", "pi0.5"}
+        valid_names = {"pi0", "pi0.5", "qwen_gr00t", "gr00t_n1_5"}
         if v not in valid_names:
             raise ValueError(f"Invalid model_name: {v}. Must be one of {valid_names}")
         return v
@@ -246,6 +243,14 @@ class TrainConfig(BaseModel):
         train_dict["data"] = DataConfig(**train_dict["data"], raw=train.data)
         train_dict["model"] = ModelConfig(**train_dict["model"], raw=train.model)
         return cls(**train_dict)
+
+    def to_omegaconf(self) -> DictConfig:
+        """Reconstruct the full OmegaConf config from stored raw DictConfigs."""
+        return OmegaConf.create({
+            "system": self.system.raw,
+            "model": self.model.raw,
+            "data": self.data.raw,
+        })
 
     class Config:
         # Allow arbitrary types for complex objects
