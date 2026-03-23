@@ -16,7 +16,6 @@ from contextlib import nullcontext
 from omegaconf import OmegaConf
 import numpy as np
 import torch
-import torch_npu
 import torch.distributed as dist
 from torch.optim import Optimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -54,6 +53,7 @@ from flagscale.train.utils.train_utils import (
     get_step_checkpoint_dir,
     update_last_checkpoint,
 )
+from flagscale.platform import get_platform
 
 IMAGENET_STATS = {
     "mean": [[[0.485]], [[0.456]], [[0.406]]],  # (c,1,1)
@@ -65,13 +65,13 @@ def set_seed(seed: int):
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
-    torch.npu.manual_seed_all(seed)
+    get_platform().manual_seed_all(seed)
 
 
 def init_ddp():
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    torch.npu.set_device(local_rank)
-    torch.distributed.init_process_group(backend="hccl", init_method="env://")
+    get_platform().set_device(local_rank)
+    torch.distributed.init_process_group(backend=get_platform().dist_backend(), init_method="env://")
 
     return local_rank
 
@@ -411,7 +411,7 @@ def update_policy(
     policy_model = policy.module if isinstance(policy, DDP) else policy
     use_amp = getattr(policy_model.config, "use_amp", False)
 
-    autocast_context = torch.amp.autocast("npu", dtype=torch.bfloat16) if use_amp else nullcontext()
+    autocast_context = torch.amp.autocast(get_platform().amp_device_type(), dtype=torch.bfloat16) if use_amp else nullcontext()
     with autocast_context:
         loss, _= policy.forward(batch)
     # TODO(rcadene): policy.unnormalize_outputs(out_dict)
@@ -484,7 +484,7 @@ def main(config: TrainConfig, seed: int):
     policy_config.use_amp = config.system.use_amp
 
     local_rank = init_ddp()
-    device = torch.device("npu", local_rank)
+    device = get_platform().device(local_rank)
     rank = dist.get_rank()
     is_main_process = rank == 0 and local_rank == 0
     policy_config.device = device
