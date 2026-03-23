@@ -41,6 +41,7 @@ from typing_extensions import Unpack
 # from lerobot.configs.policies import PreTrainedConfig
 from flagscale.models.pi0.configuration_pi0 import DEFAULT_IMAGE_SIZE, PI0Config
 from flagscale.train.utils.hub import HubMixin
+from flagscale.platform import get_platform
 
 T = TypeVar("T", bound="PI0Policy")
 
@@ -96,7 +97,6 @@ def create_sinusoidal_pos_embedding(  # see openpi `create_sinusoidal_pos_embedd
 
 
 def sample_beta(alpha, beta, bsize, device):  # see openpi `sample_beta` (exact copy)
-    from flagscale.platform import get_platform
     sample_device = "cpu" if not get_platform().supports_distributions_on_device() else device
     alpha_t = torch.as_tensor(alpha, dtype=torch.float32, device=sample_device)
     beta_t = torch.as_tensor(beta, dtype=torch.float32, device=sample_device)

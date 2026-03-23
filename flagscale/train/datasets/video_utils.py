@@ -150,7 +150,6 @@ def decode_video_frames_torchvision(
 
     is_within_tol = min_ < tolerance_s
     if not is_within_tol.all():
-        import logging
         logging.warning(
             f"Query timestamps violate tolerance ({min_[~is_within_tol]} > {tolerance_s=}). "
             f"video: {video_path}. Using closest available frames."
@@ -273,7 +272,6 @@ def decode_video_frames_torchcodec(
 
     is_within_tol = min_ < tolerance_s
     if not is_within_tol.all():
-        import logging
         logging.warning(
             f"Query timestamps violate tolerance ({min_[~is_within_tol]} > {tolerance_s=}). "
             f"video: {video_path}. Using closest available frames."

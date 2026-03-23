@@ -6,7 +6,7 @@ from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from torchvision import transforms
 
-from flagscale.platform import get_platform  # noqa: F401  # must be before model imports
+from flagscale.platform import get_platform  # noqa: F401 must be before model imports
 from flagscale.models.configs.types import FeatureType, NormalizationMode, PolicyFeature
 from flagscale.models.pi0.configuration_pi0 import PI0Config
 from flagscale.models.pi0.modeling_pi0 import PI0Policy
