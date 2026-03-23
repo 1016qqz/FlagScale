@@ -39,11 +39,21 @@ from flagscale.train.processor.pipeline import ProcessorStep, ProcessorStepRegis
 DEFAULT_TOKENIZER_ASSETS_REPO = "lerobot/eagle2hg-processor-groot-n1p5"
 
 
-def _to_uint8_np_bhwc(img_t: torch.Tensor) -> np.ndarray:
-    # img_t: (B, C, H, W) float in [0,1] or uint8
-    if img_t.dtype.is_floating_point:
-        img_t = (img_t.clamp(0, 1) * 255.0).to(torch.uint8)
-    return rearrange(img_t.cpu().numpy(), "b c h w -> b h w c")
+def _to_uint8_np_bhwc(img: torch.Tensor | np.ndarray) -> np.ndarray:
+    # img: (B, C, H, W) float in [0,1] or uint8  — torch or numpy
+    if isinstance(img, np.ndarray):
+        if img.ndim == 3:  # (H, W, C) single image from inference
+            img = img[np.newaxis]  # -> (B, H, W, C)
+        if img.ndim == 4 and img.shape[-1] in (1, 3):  # already (B, H, W, C)
+            return img.astype(np.uint8)
+        # (B, C, H, W) layout
+        if np.issubdtype(img.dtype, np.floating):
+            img = np.clip(img, 0, 1) * 255.0
+        return rearrange(img.astype(np.uint8), "b c h w -> b h w c")
+    # torch path
+    if img.dtype.is_floating_point:
+        img = (img.clamp(0, 1) * 255.0).to(torch.uint8)
+    return rearrange(img.cpu().numpy(), "b c h w -> b h w c")
 
 
 def _build_eagle_processor(tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS_REPO) -> ProcessorMixin:
@@ -187,7 +197,11 @@ class GrootPackInputsStep(ProcessorStep):
 
         # 3) State/state_mask -> (B, 1, max_state_dim)
         if OBS_STATE in obs:
-            state = obs[OBS_STATE]  # (B, D)
+            state = obs[OBS_STATE]  # (B, D) or numpy (D,)/(B, D) from inference
+            if isinstance(state, np.ndarray):
+                state = torch.as_tensor(state, dtype=torch.float32)
+            if state.dim() == 1:
+                state = state.unsqueeze(0)  # (D,) -> (1, D)
             if state.dim() != 2:
                 raise ValueError(f"state must be (B, D), got {tuple(state.shape)}")
             bsz, d = state.shape
@@ -441,10 +455,7 @@ class GrootActionUnpackUnnormalizeStep(ProcessorStep):
         if not isinstance(action, torch.Tensor):
             return transition
 
-        # Select last timestep and slice to env dimension
-        if action.dim() == 3:
-            action = action[:, -1, :]
-        # Now action is (B, D_model)
+        # Slice to env action dimension (keep all timesteps for action chunking)
         if self.env_action_dim and action.shape[-1] >= self.env_action_dim:
             action = action[..., : self.env_action_dim]
 
