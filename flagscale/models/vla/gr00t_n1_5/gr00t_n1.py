@@ -43,7 +43,7 @@ try:
 except ImportError:
     tree = None
 
-DEFAULT_VENDOR_EAGLE_PATH = str((Path(__file__).resolve().parent / "eagle2_hg_model").resolve())
+DEFAULT_VENDOR_EAGLE_PATH = str((Path(__file__).resolve().parent / "eagle2").resolve())
 DEFAULT_TOKENIZER_ASSETS_REPO = "lerobot/eagle2hg-processor-groot-n1p5"
 
 BACKBONE_FEATURE_KEY = "backbone_features"
@@ -137,10 +137,10 @@ class EagleBackbone(nn.Module):
         super().__init__()
         assert not reproject_vision, "Reproject vision is not implemented here, set to False"
 
-        from flagscale.models.vla.gr00t_n1_5.eagle2_hg_model.configuration_eagle2_5_vl import (
+        from flagscale.models.vla.gr00t_n1_5.eagle2.configuration_eagle2_5_vl import (
             Eagle25VLConfig,
         )
-        from flagscale.models.vla.gr00t_n1_5.eagle2_hg_model.modeling_eagle2_5_vl import (
+        from flagscale.models.vla.gr00t_n1_5.eagle2.modeling_eagle2_5_vl import (
             Eagle25VLForConditionalGeneration,
         )
 
