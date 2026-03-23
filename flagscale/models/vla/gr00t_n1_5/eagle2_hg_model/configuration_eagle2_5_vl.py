@@ -62,7 +62,9 @@ class Eagle25VLConfig(PretrainedConfig):
 
         if vision_config is None:
             vision_config = {"model_type": "siglip_vision_model"}
-            logger.info("vision_config is None. Initializing the InternVisionConfig with default values.")
+            logger.info(
+                "vision_config is None. Initializing the InternVisionConfig with default values."
+            )
 
         if text_config is None:
             text_config = {"architectures": ["Qwen2ForCausalLM"]}

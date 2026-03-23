@@ -74,7 +74,9 @@ def fetch_image(ele: dict[str, str | Image.Image]) -> Image.Image:
     image = to_rgb(image_obj)
     if "scale_factor" in ele:
         scale_factor = ele["scale_factor"]
-        image = image.resize((image.width * scale_factor, image.height * scale_factor), Image.BILINEAR)
+        image = image.resize(
+            (image.width * scale_factor, image.height * scale_factor), Image.BILINEAR
+        )
     return image
 
 
@@ -144,8 +146,12 @@ class Eagle25VLProcessor(ProcessorMixin):
         **kwargs,
     ):
         self.vision_feature_select_strategy = vision_feature_select_strategy
-        self.image_token = tokenizer.image_token if hasattr(tokenizer, "image_token") else image_token
-        self.video_token = tokenizer.video_token if hasattr(tokenizer, "video_token") else video_token
+        self.image_token = (
+            tokenizer.image_token if hasattr(tokenizer, "image_token") else image_token
+        )
+        self.video_token = (
+            tokenizer.video_token if hasattr(tokenizer, "video_token") else video_token
+        )
         self.image_token_id = (
             tokenizer.image_token_id
             if getattr(tokenizer, "image_token_id", None)
@@ -366,7 +372,9 @@ class Eagle25VLProcessor(ProcessorMixin):
         timestamps_batch = output_kwargs["videos_kwargs"].pop("timestamps", None)
         fps_batch = output_kwargs["videos_kwargs"].pop("fps", None)
         for sample in text_list:
-            timestamps_list = timestamps_batch[video_start_idx:] if timestamps_batch is not None else None
+            timestamps_list = (
+                timestamps_batch[video_start_idx:] if timestamps_batch is not None else None
+            )
             fps_list = fps_batch[video_start_idx:] if fps_batch is not None else None
             (
                 sample,
@@ -474,7 +482,9 @@ class Eagle25VLProcessor(ProcessorMixin):
         self,
         conversations: list[dict] | list[list[dict]],
         return_video_kwargs: bool = False,
-    ) -> tuple[list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None, dict | None]:
+    ) -> tuple[
+        list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None, dict | None
+    ]:
         vision_infos = self.extract_vision_info(conversations)
         ## Read images or videos
         image_inputs = []

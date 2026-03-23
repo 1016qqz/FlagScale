@@ -75,7 +75,8 @@ class Gr00tN15(TrainablePolicy):
         groot_inputs = {
             k: v
             for k, v in batch.items()
-            if (k in allowed_base or k.startswith("eagle_")) and not (k.startswith("next.") or k == "info")
+            if (k in allowed_base or k.startswith("eagle_"))
+            and not (k.startswith("next.") or k == "info")
         }
 
         # Get device from model parameters
@@ -106,7 +107,8 @@ class Gr00tN15(TrainablePolicy):
         groot_inputs = {
             k: v
             for k, v in batch.items()
-            if (k in allowed_base or k.startswith("eagle_")) and not (k.startswith("next.") or k == "info")
+            if (k in allowed_base or k.startswith("eagle_"))
+            and not (k.startswith("next.") or k == "info")
         }
 
         # Get device from model parameters

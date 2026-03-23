@@ -8,11 +8,11 @@ import time
 import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+import flagscale.models.vla.gr00t_n1_5.processor_gr00t  # noqa: F401  register GR00T processor steps
 from flagscale.logger import logger
 from flagscale.models.utils.constants import ACTION
 from flagscale.serve.websocket_policy_server import WebsocketPolicyServer
 from flagscale.train.utils.train_utils import load_checkpoint
-import flagscale.models.vla.gr00t_n1_5.processor_gr00t  # noqa: F401  register GR00T processor steps
 
 
 class Policy:
@@ -51,16 +51,19 @@ class Policy:
         # Debug: log incoming keys and state info
         logger.info(f"incoming keys: {list(batch.keys())}")
         if "observation.state" in batch:
-            import numpy as np
             s = batch["observation.state"]
-            logger.info(f"observation.state: type={type(s).__name__}, shape={s.shape if hasattr(s, 'shape') else 'N/A'}, values={s}")
+            logger.info(
+                f"observation.state: type={type(s).__name__}, shape={s.shape if hasattr(s, 'shape') else 'N/A'}, values={s}"
+            )
 
         batch = self.preprocessor(batch)
 
         with torch.no_grad():
             action = self.model.predict_action(batch)
             a_raw = action[ACTION]
-            logger.info(f"action before postprocessor: shape={a_raw.shape}, first_step_7={a_raw[0, 0, :7]}")
+            logger.info(
+                f"action before postprocessor: shape={a_raw.shape}, first_step_7={a_raw[0, 0, :7]}"
+            )
 
         logger.info("Applying postprocessor...")
         action = self.postprocessor(action)

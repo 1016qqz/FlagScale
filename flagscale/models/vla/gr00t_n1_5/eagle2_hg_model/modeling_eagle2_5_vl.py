@@ -77,7 +77,9 @@ class Eagle25VLPreTrainedModel(PreTrainedModel):
         elif isinstance(module, nn.Embedding):
             if not getattr(module.weight, "_is_hf_initialized", False):
                 module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None and not getattr(module.weight, "_is_hf_initialized", False):
+            if module.padding_idx is not None and not getattr(
+                module.weight, "_is_hf_initialized", False
+            ):
                 module.weight.data[module.padding_idx].zero_()
 
 
@@ -91,7 +93,9 @@ class Eagle25VLForConditionalGeneration(Eagle25VLPreTrainedModel, GenerationMixi
         patch_size = config.vision_config.patch_size
         self.patch_size = patch_size
         if config.use_pixel_shuffle:
-            self.num_image_token = int((image_size // patch_size) ** 2 * (config.downsample_ratio**2))
+            self.num_image_token = int(
+                (image_size // patch_size) ** 2 * (config.downsample_ratio**2)
+            )
         else:
             self.num_image_token = int((image_size // patch_size) ** 2)
 
@@ -128,7 +132,9 @@ class Eagle25VLForConditionalGeneration(Eagle25VLPreTrainedModel, GenerationMixi
             elif config.text_config.architectures[0] == "Qwen3ForCausalLM":
                 self.language_model = Qwen3ForCausalLM(config.text_config)
             else:
-                raise NotImplementedError(f"{config.text_config.architectures[0]} is not implemented.")
+                raise NotImplementedError(
+                    f"{config.text_config.architectures[0]} is not implemented."
+                )
 
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.text_config.hidden_size
@@ -155,7 +161,9 @@ class Eagle25VLForConditionalGeneration(Eagle25VLPreTrainedModel, GenerationMixi
         self.neftune_alpha = None
 
         if config.use_backbone_lora:
-            self.wrap_backbone_lora(r=config.use_backbone_lora, lora_alpha=2 * config.use_backbone_lora)
+            self.wrap_backbone_lora(
+                r=config.use_backbone_lora, lora_alpha=2 * config.use_backbone_lora
+            )
 
         self.use_llm_lora = config.use_llm_lora
         if config.use_llm_lora:
@@ -294,7 +302,9 @@ class Eagle25VLForConditionalGeneration(Eagle25VLPreTrainedModel, GenerationMixi
         # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
         x = x.permute(0, 2, 1, 3).contiguous()
         # N, H * scale, W, C // scale --> N, H * scale, W * scale, C // (scale ** 2)
-        x = x.view(n, int(h * scale_factor), int(w * scale_factor), int(c / (scale_factor * scale_factor)))
+        x = x.view(
+            n, int(h * scale_factor), int(w * scale_factor), int(c / (scale_factor * scale_factor))
+        )
 
         x = x.permute(0, 2, 1, 3).contiguous()
         return x

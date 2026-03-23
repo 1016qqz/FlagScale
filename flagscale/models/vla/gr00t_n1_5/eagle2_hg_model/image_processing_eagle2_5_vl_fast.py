@@ -17,10 +17,13 @@ from transformers.image_processing_utils_fast import (
     group_images_by_shape,
     reorder_images,
 )
+
 try:
     from transformers.image_processing_utils_fast import ImagesKwargs
 except ImportError:
-    from transformers.image_processing_utils_fast import DefaultFastImageProcessorKwargs as ImagesKwargs
+    from transformers.image_processing_utils_fast import (
+        DefaultFastImageProcessorKwargs as ImagesKwargs,
+    )
 from transformers.image_utils import (
     IMAGENET_STANDARD_MEAN,  # 0.5, 0.5, 0.5
     IMAGENET_STANDARD_STD,  # 0.5, 0.5, 0.5
@@ -44,10 +47,10 @@ from transformers.video_utils import VideoInput  # noqa: TC002
 if is_torch_available():
     import torch
 if is_torchvision_v2_available():
-    from torchvision.transforms.v2 import functional as F  # noqa: N812
+    from torchvision.transforms.v2 import functional as F
     from transformers.image_utils import pil_torch_interpolation_mapping
 else:
-    from torchvision.transforms import functional as F  # noqa: N812
+    from torchvision.transforms import functional as F
 
 
 def crop(img: torch.Tensor, left: int, top: int, right: int, bottom: int) -> torch.Tensor:
@@ -285,7 +288,9 @@ class Eagle25VLImageProcessorFast(BaseImageProcessorFast):
             )
             image_used_to_split = padded_image
         else:
-            image_used_to_split = F.resize(image, (target_height, target_width), interpolation=interpolation)
+            image_used_to_split = F.resize(
+                image, (target_height, target_width), interpolation=interpolation
+            )
 
         processed_tiles = []
         for i in range(blocks):
@@ -409,7 +414,9 @@ class Eagle25VLImageProcessorFast(BaseImageProcessorFast):
                 processed_image_patches_grouped, grouped_image_patches_index
             )
             processed_image_patches = (
-                torch.stack(processed_image_patches, dim=0) if return_tensors else processed_image_patches
+                torch.stack(processed_image_patches, dim=0)
+                if return_tensors
+                else processed_image_patches
             )
             processed_images.append(processed_image_patches)
             image_sizes.append(get_image_size(image, ChannelDimension.FIRST))
@@ -418,7 +425,9 @@ class Eagle25VLImageProcessorFast(BaseImageProcessorFast):
             processed_images = self._pad_for_batching(processed_images)
 
         # processed_images = torch.stack(processed_images, dim=0) if return_tensors else processed_images
-        processed_images = torch.cat(processed_images, dim=0) if return_tensors else processed_images
+        processed_images = (
+            torch.cat(processed_images, dim=0) if return_tensors else processed_images
+        )
         return BatchFeature(
             data={"pixel_values": processed_images, "image_sizes": image_sizes},
             tensor_type=return_tensors,
