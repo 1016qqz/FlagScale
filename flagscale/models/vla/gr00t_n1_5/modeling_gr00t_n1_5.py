@@ -1,5 +1,4 @@
-# Mainly adopted from:
-# https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/groot/modeling_groot.py
+# Copied from https://github.com/huggingface/lerobot/blob/0db5f66d/src/lerobot/policies/groot/modeling_groot.py
 # Below is the original copyright:
 
 # Copyright 2024 NVIDIA Corporation and The HuggingFace Inc. team. All rights reserved.
@@ -76,7 +75,8 @@ class Gr00tN15(TrainablePolicy):
         groot_inputs = {
             k: v
             for k, v in batch.items()
-            if (k in allowed_base or k.startswith("eagle_")) and not (k.startswith("next.") or k == "info")
+            if (k in allowed_base or k.startswith("eagle_"))
+            and not (k.startswith("next.") or k == "info")
         }
 
         # Get device from model parameters
@@ -107,7 +107,8 @@ class Gr00tN15(TrainablePolicy):
         groot_inputs = {
             k: v
             for k, v in batch.items()
-            if (k in allowed_base or k.startswith("eagle_")) and not (k.startswith("next.") or k == "info")
+            if (k in allowed_base or k.startswith("eagle_"))
+            and not (k.startswith("next.") or k == "info")
         }
 
         # Get device from model parameters

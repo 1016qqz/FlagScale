@@ -20,7 +20,6 @@ from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateD
 from torch.optim import Optimizer
 
 from flagscale.logger import logger
-from flagscale.platform import get_platform
 from flagscale.train.train_config import TrainConfig, DataConfig
 from flagscale.train.datasets.lerobot_dataset import (
     LeRobotDataset,
@@ -45,33 +44,16 @@ from flagscale.models.vla.gr00t_n1_5 import Gr00tN15
 import flagscale.models.vla.gr00t_n1_5.processor_gr00t  # noqa: F401  register GR00T processor steps
 
 
-# Monkey-patch: transformers 4.57+ kernel-hub discovery can't find flash_attn on some platforms
-# (e.g. MUSA), but direct import works fine. Replace _lazy_imports so transformers uses flash_attn directly.
-try:
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
-    from flash_attn.bert_padding import pad_input, unpad_input
-    import transformers.modeling_flash_attention_utils as _fa_utils
-    _fa_utils._flash_fn = flash_attn_func
-    _fa_utils._flash_varlen_fn = flash_attn_varlen_func
-    _fa_utils._pad_fn = pad_input
-    _fa_utils._unpad_fn = unpad_input
-    def _patched_lazy_imports(implementation=None):
-        return flash_attn_func, flash_attn_varlen_func, pad_input, unpad_input
-    _fa_utils._lazy_imports = _patched_lazy_imports
-except ImportError:
-    pass
-
-
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    get_platform().manual_seed_all(seed)
-    if get_platform().name() == "cuda":
-        torch.backends.cudnn.enabled = True
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cuda.matmul.allow_tf32 = False
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cuda.matmul.allow_tf32 = False
 
 
 def apply_fsdp2(policy, device_mesh):
@@ -83,7 +65,7 @@ def apply_fsdp2(policy, device_mesh):
     # Cast everything to fp32 first so the root param group has uniform dtype.
     policy = policy.float()
 
-    # `reduce_dtype=torch.float32` would make evaluation on libero_goal drop to 94.8% (from 97.0%)
+    # TODO: (yupu) check `reduce_dtype=torch.float32`
     mp_policy = MixedPrecisionPolicy(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.bfloat16,
@@ -100,9 +82,10 @@ def apply_fsdp2(policy, device_mesh):
 
 
 def make_dataset(cfg: DataConfig):
-    # torchcodec depends on NVIDIA NVDEC which is not available on all platforms (e.g. MUSA);
-    # fall back to pyav for non-CUDA platforms.
-    video_backend = "torchcodec" if get_platform().name() == "cuda" else "pyav"
+    # TODO: (yupu) Remove hard-coded video backend
+    # After not much testing, It feels like that `torchcodec` is more robust than `pyav`
+    # `pyav` crashes sometimes
+    video_backend = "torchcodec"
 
     # Leave the revision to None
     ds_meta = LeRobotDatasetMetadata(root=cfg.data_path, revision=None)
@@ -209,7 +192,7 @@ def make_policy(
     policy = Gr00tN15(config=config)
     policy.input_features = input_features
     policy.output_features = output_features
-    policy.to(get_platform().name())
+    policy.to("cuda")
 
     return policy
 
@@ -380,7 +363,7 @@ def update_policy(
     optimizer.zero_grad()
 
     autocast_context = (
-        torch.amp.autocast(get_platform().amp_device_type(), dtype=torch.bfloat16) if use_amp else nullcontext()
+        torch.amp.autocast("cuda", dtype=torch.bfloat16) if use_amp else nullcontext()
     )
 
     with autocast_context:
@@ -415,10 +398,10 @@ def update_policy(
 def main(config: TrainConfig, seed: int):
     set_seed(seed)
 
-    dist.init_process_group(backend=get_platform().dist_backend())
+    dist.init_process_group(backend="nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
-    get_platform().set_device(local_rank)
-    device = get_platform().device(local_rank)
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     is_main_process = rank == 0
@@ -500,7 +483,7 @@ def main(config: TrainConfig, seed: int):
     num_episodes = dataset.num_episodes
 
     # --- Apply FSDP2 ---
-    device_mesh = init_device_mesh(get_platform().name(), (world_size,))
+    device_mesh = init_device_mesh("cuda", (world_size,))
     apply_fsdp2(policy, device_mesh)
 
     # Setup optimizer and scheduler (applies freeze config internally)

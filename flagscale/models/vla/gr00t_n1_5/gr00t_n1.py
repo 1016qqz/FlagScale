@@ -1,3 +1,4 @@
+# Copied from https://github.com/huggingface/lerobot/blob/0db5f66d/src/lerobot/policies/groot/groot_n1.py
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,6 +27,7 @@ from torch.distributions import Beta
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.feature_extraction_utils import BatchFeature
 
+from flagscale.models.utils.constants import HF_LEROBOT_HOME
 from flagscale.models.vla.action_model.flow_matching_head.cross_attention_dit import (
     DiT,
     SelfAttentionTransformer,
@@ -35,14 +37,13 @@ from flagscale.models.vla.action_model.gr00t_action_header import (
     FlowmatchingActionHeadConfig,
     MultiEmbodimentActionEncoder,
 )
-from flagscale.models.utils.constants import HF_LEROBOT_HOME
 
 try:
     import tree
 except ImportError:
     tree = None
 
-DEFAULT_VENDOR_EAGLE_PATH = str((Path(__file__).resolve().parent / "eagle2_hg_model").resolve())
+DEFAULT_VENDOR_EAGLE_PATH = str((Path(__file__).resolve().parent / "eagle2").resolve())
 DEFAULT_TOKENIZER_ASSETS_REPO = "lerobot/eagle2hg-processor-groot-n1p5"
 
 BACKBONE_FEATURE_KEY = "backbone_features"
@@ -76,6 +77,7 @@ def ensure_eagle_cache_ready(vendor_dir: Path, cache_dir: Path, assets_repo: str
     # stale after vendored files are updated. Propagate here to keep them in sync.
     try:
         from huggingface_hub.constants import HF_HOME as _hf_home
+
         sanitized = str(cache_dir.name).replace("-", "_hyphen_").replace(".", "_dot_")
         # Walk up to find the repo-like directory name (e.g. "eagle2hg-processor-groot-n1p5")
         repo_name = assets_repo.replace("/", "_hyphen_")
@@ -135,8 +137,12 @@ class EagleBackbone(nn.Module):
         super().__init__()
         assert not reproject_vision, "Reproject vision is not implemented here, set to False"
 
-        from flagscale.models.vla.gr00t_n1_5.eagle2_hg_model.configuration_eagle2_5_vl import Eagle25VLConfig
-        from flagscale.models.vla.gr00t_n1_5.eagle2_hg_model.modeling_eagle2_5_vl import Eagle25VLForConditionalGeneration
+        from flagscale.models.vla.gr00t_n1_5.eagle2.configuration_eagle2_5_vl import (
+            Eagle25VLConfig,
+        )
+        from flagscale.models.vla.gr00t_n1_5.eagle2.modeling_eagle2_5_vl import (
+            Eagle25VLForConditionalGeneration,
+        )
 
         vendor_dir = DEFAULT_VENDOR_EAGLE_PATH
         cache_dir = HF_LEROBOT_HOME / tokenizer_assets_repo
@@ -198,7 +204,9 @@ class EagleBackbone(nn.Module):
     def forward_eagle(self, vl_input: BatchFeature) -> BatchFeature:
         eagle_prefix = "eagle_"
         eagle_input = {
-            k.removeprefix(eagle_prefix): v for k, v in vl_input.items() if k.startswith(eagle_prefix)
+            k.removeprefix(eagle_prefix): v
+            for k, v in vl_input.items()
+            if k.startswith(eagle_prefix)
         }
         del eagle_input["image_sizes"]
 
@@ -281,9 +289,13 @@ class FlowmatchingActionHead(nn.Module):
         self.future_tokens = nn.Embedding(config.num_target_vision_tokens, self.input_embedding_dim)
         nn.init.normal_(self.future_tokens.weight, mean=0.0, std=0.02)
 
-        self.vlln = nn.LayerNorm(config.backbone_embedding_dim) if config.use_vlln else nn.Identity()
+        self.vlln = (
+            nn.LayerNorm(config.backbone_embedding_dim) if config.use_vlln else nn.Identity()
+        )
         self.vl_self_attention = (
-            SelfAttentionTransformer(**config.vl_self_attention_cfg) if config.use_vlln else nn.Identity()
+            SelfAttentionTransformer(**config.vl_self_attention_cfg)
+            if config.use_vlln
+            else nn.Identity()
         )
 
         if config.add_pos_embed:
@@ -454,7 +466,9 @@ class FlowmatchingActionHead(nn.Module):
             t_discretized = int(t_cont * self.num_timestep_buckets)
 
             # Embed noised action trajectory.
-            timesteps_tensor = torch.full(size=(batch_size,), fill_value=t_discretized, device=device)
+            timesteps_tensor = torch.full(
+                size=(batch_size,), fill_value=t_discretized, device=device
+            )
             action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
             # Maybe add position embedding.
             if self.config.add_pos_embed:
@@ -586,7 +600,8 @@ class GR00TN15(PreTrainedModel):
 
     def validate_data(self, action_head_outputs, backbone_outputs, is_training):
         fail_backbone = (
-            not isinstance(backbone_outputs, BatchFeature) or BACKBONE_FEATURE_KEY not in backbone_outputs
+            not isinstance(backbone_outputs, BatchFeature)
+            or BACKBONE_FEATURE_KEY not in backbone_outputs
         )
 
         if fail_backbone:
@@ -697,7 +712,9 @@ class GR00TN15(PreTrainedModel):
             local_model_path, local_model_path=local_model_path, **kwargs
         )
 
-        pretrained_model.backbone.set_trainable_parameters(tune_visual=tune_visual, tune_llm=tune_llm)
+        pretrained_model.backbone.set_trainable_parameters(
+            tune_visual=tune_visual, tune_llm=tune_llm
+        )
         pretrained_model.action_head.set_trainable_parameters(
             tune_projector=tune_projector, tune_diffusion_model=tune_diffusion_model
         )

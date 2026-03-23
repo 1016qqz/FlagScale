@@ -1,5 +1,4 @@
-# Mainly adopted from:
-# https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/groot/processor_groot.py
+# Copied from https://github.com/huggingface/lerobot/blob/0db5f66d/src/lerobot/policies/groot/processor_groot.py
 # Below is the original copyright:
 
 # Copyright 2024 NVIDIA Corporation and The HuggingFace Inc. team. All rights reserved.
@@ -17,7 +16,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -56,7 +54,9 @@ def _to_uint8_np_bhwc(img: torch.Tensor | np.ndarray) -> np.ndarray:
     return rearrange(img.cpu().numpy(), "b c h w -> b h w c")
 
 
-def _build_eagle_processor(tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS_REPO) -> ProcessorMixin:
+def _build_eagle_processor(
+    tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS_REPO,
+) -> ProcessorMixin:
     cache_dir = HF_LEROBOT_HOME / tokenizer_assets_repo
     if not cache_dir.exists():
         raise FileNotFoundError(
@@ -66,7 +66,10 @@ def _build_eagle_processor(tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS
         )
 
     proc = AutoProcessor.from_pretrained(
-        str(cache_dir), trust_remote_code=True, use_fast=True, local_files_only=True,
+        str(cache_dir),
+        trust_remote_code=True,
+        use_fast=True,
+        local_files_only=True,
     )
     proc.tokenizer.padding_side = "left"
     return proc
@@ -91,7 +94,11 @@ def collate(features: list[dict[str, Any]], eagle_processor: ProcessorMixin) -> 
             eagle_inputs = eagle_processor(
                 text=text_list,
                 images=image_inputs,
-                images_kwargs={"min_dynamic_tiles": 1, "max_dynamic_tiles": 1, "use_thumbnail": False},
+                images_kwargs={
+                    "min_dynamic_tiles": 1,
+                    "max_dynamic_tiles": 1,
+                    "use_thumbnail": False,
+                },
                 return_tensors="pt",
                 padding=True,
             )
@@ -143,7 +150,8 @@ class GrootPackInputsStep(ProcessorStep):
             t = t.flatten().to(
                 dtype=torch.float32,
                 device=next(
-                    (v.device for v in obs.values() if isinstance(v, torch.Tensor)), torch.device("cpu")
+                    (v.device for v in obs.values() if isinstance(v, torch.Tensor)),
+                    torch.device("cpu"),
                 ),
             )
             d = int(t.shape[-1]) if t.numel() > 0 else 0
@@ -170,7 +178,9 @@ class GrootPackInputsStep(ProcessorStep):
             return torch.where(mask, mapped, torch.zeros_like(mapped))
 
         # 1) Video (B, T=1, V, H, W, C) uint8
-        img_keys = sorted([k for k in obs if k.startswith(OBS_IMAGES) and not k.endswith("_is_pad")])
+        img_keys = sorted(
+            [k for k in obs if k.startswith(OBS_IMAGES) and not k.endswith("_is_pad")]
+        )
         if not img_keys and OBS_IMAGE in obs:
             img_keys = [OBS_IMAGE]
         if img_keys:
@@ -213,9 +223,13 @@ class GrootPackInputsStep(ProcessorStep):
                 state = state[:, :, : self.max_state_dim]
                 d = self.max_state_dim
             elif d < self.max_state_dim:
-                pad = torch.zeros(bsz, 1, self.max_state_dim - d, dtype=state.dtype, device=state.device)
+                pad = torch.zeros(
+                    bsz, 1, self.max_state_dim - d, dtype=state.dtype, device=state.device
+                )
                 state = torch.cat([state, pad], dim=2)
-            state_mask = torch.zeros(bsz, 1, self.max_state_dim, dtype=torch.bool, device=state.device)
+            state_mask = torch.zeros(
+                bsz, 1, self.max_state_dim, dtype=torch.bool, device=state.device
+            )
             state_mask[:, :, :d] = True
             obs["state"] = state
             obs["state_mask"] = state_mask
@@ -250,9 +264,13 @@ class GrootPackInputsStep(ProcessorStep):
                 action = action[:, :, : self.max_action_dim]
                 d = self.max_action_dim
             elif d < self.max_action_dim:
-                pad = torch.zeros(b, t, self.max_action_dim - d, dtype=action.dtype, device=action.device)
+                pad = torch.zeros(
+                    b, t, self.max_action_dim - d, dtype=action.dtype, device=action.device
+                )
                 action = torch.cat([action, pad], dim=2)
-            action_mask = torch.zeros(b, t, self.max_action_dim, dtype=torch.bool, device=action.device)
+            action_mask = torch.zeros(
+                b, t, self.max_action_dim, dtype=torch.bool, device=action.device
+            )
             action_mask[:, :, :d] = True
             transition[TransitionKey.ACTION] = action
             comp["action_mask"] = action_mask
@@ -262,7 +280,7 @@ class GrootPackInputsStep(ProcessorStep):
         # Infer batch size/device from any tensor in obs or action
         bsz = None
         device = torch.device("cpu")
-        for v in list(obs.values()) + [transition.get(TransitionKey.ACTION)]:
+        for v in [*obs.values(), transition.get(TransitionKey.ACTION)]:
             if isinstance(v, torch.Tensor):
                 bsz = v.shape[0]
                 device = v.device
@@ -379,7 +397,9 @@ class GrootEagleEncodeStep(ProcessorStep):
             text_content = [{"type": "text", "text": lang_formatted}]
             image_content = [{"type": "image", "image": img} for img in images]
             conv = [{"role": "user", "content": image_content + text_content}]
-            text_list = [self.proc.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)]
+            text_list = [
+                self.proc.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
+            ]
             img_inputs, vid_inputs = self.proc.process_vision_info(conv)
             eagle_contents.append(
                 {
