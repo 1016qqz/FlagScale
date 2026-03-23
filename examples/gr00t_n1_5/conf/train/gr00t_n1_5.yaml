@@ -18,8 +18,8 @@ model:
   checkpoint_dir: /share/project/fengyupu/models/nvidia/GR00T-N1.5-3B
 
   # Fine-tuning control (from groot_finetune_script.py)
-  tune_llm: false
-  tune_visual: false
+  tune_llm: true
+  tune_visual: true
   tune_projector: true
   tune_diffusion_model: true
   compute_dtype: bfloat16
@@ -39,30 +39,6 @@ model:
       decay_steps: 10000
       peak_lr: 1.0e-4
       decay_lr: 1.0e-5
-
-  # ============================================================
-  # Module Freezing Configuration
-  # ============================================================
-  # Freezing logic: freeze_patterns are applied first, then keep_patterns override.
-  # Patterns are regex matched against full parameter names.
-  #
-  # Common patterns for GR00T N1.5:
-  #   - "_groot_model\\.backbone\\..*"                             # Entire Eagle backbone
-  #   - "_groot_model\\.backbone\\.eagle_model\\.vision_model\\..*"  # Vision encoder only
-  #   - "_groot_model\\.backbone\\.eagle_model\\.language_model\\..*"  # LLM only
-  #   - "_groot_model\\.action_head\\..*"                          # Entire action head
-  #   - "_groot_model\\.action_head\\.model\\..*"                  # DiT blocks only
-  #
-  # freeze:
-  #   # SCENARIO A: Freeze backbone, train only action head
-  #   freeze_patterns:
-  #     - "_groot_model\\.backbone\\..*"
-  #
-  #   # SCENARIO B: Freeze backbone but keep eagle_linear trainable
-  #   # freeze_patterns:
-  #   #   - "_groot_model\\.backbone\\..*"
-  #   # keep_patterns:
-  #   #   - "_groot_model\\.backbone\\.eagle_linear\\..*"
 
 data:
   dataset_type: lerobot
