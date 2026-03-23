@@ -261,7 +261,7 @@ class GrootPackInputsStep(ProcessorStep):
         # Infer batch size/device from any tensor in obs or action
         bsz = None
         device = torch.device("cpu")
-        for v in list(obs.values()) + [transition.get(TransitionKey.ACTION)]:
+        for v in [*obs.values(), transition.get(TransitionKey.ACTION)]:
             if isinstance(v, torch.Tensor):
                 bsz = v.shape[0]
                 device = v.device
