@@ -132,7 +132,9 @@ def decode_video_frames_torchvision(
             if current_ts >= last_ts:
                 break
     except Exception as e:
-        print(f"[WARNING] pyav decode error in {video_path}: {e}, got {len(loaded_frames)} frames so far")
+        print(
+            f"[WARNING] pyav decode error in {video_path}: {e}, got {len(loaded_frames)} frames so far"
+        )
         if len(loaded_frames) == 0:
             raise
 

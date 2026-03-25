@@ -47,8 +47,8 @@ from flagscale.models.utils.constants import (
     OBS_LANGUAGE_TOKENS,
     OPENPI_ATTENTION_MASK_VALUE,
 )
-from flagscale.train.utils.hub import HubMixin
 from flagscale.platform import get_platform
+from flagscale.train.utils.hub import HubMixin
 
 T = TypeVar("T", bound="PI05Policy")
 

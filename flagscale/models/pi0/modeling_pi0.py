@@ -40,8 +40,8 @@ from typing_extensions import Unpack
 
 # from lerobot.configs.policies import PreTrainedConfig
 from flagscale.models.pi0.configuration_pi0 import DEFAULT_IMAGE_SIZE, PI0Config
-from flagscale.train.utils.hub import HubMixin
 from flagscale.platform import get_platform
+from flagscale.train.utils.hub import HubMixin
 
 T = TypeVar("T", bound="PI0Policy")
 

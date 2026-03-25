@@ -4,19 +4,20 @@ from .platform_base import PlatformBase
 
 
 class PlatformMUSA(PlatformBase):
-
     def name(self) -> str:
         return "musa"
 
     def is_available(self) -> bool:
         try:
             import torch_musa  # noqa: F401
+
             return torch.musa.is_available() and torch.musa.device_count() > 0
         except Exception:
             return False
 
     def set_device(self, device_index):
         import torch_musa  # noqa: F401
+
         torch.musa.set_device(device_index)
 
     def device(self, device_index=None):
@@ -24,6 +25,7 @@ class PlatformMUSA(PlatformBase):
 
     def device_count(self) -> int:
         import torch_musa  # noqa: F401
+
         return torch.musa.device_count()
 
     def dist_backend(self) -> str:
@@ -31,6 +33,7 @@ class PlatformMUSA(PlatformBase):
 
     def manual_seed_all(self, seed):
         import torch_musa  # noqa: F401
+
         torch.musa.manual_seed_all(seed)
 
     def amp_device_type(self) -> str:

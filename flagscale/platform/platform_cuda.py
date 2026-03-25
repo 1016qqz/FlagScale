@@ -4,7 +4,6 @@ from .platform_base import PlatformBase
 
 
 class PlatformCUDA(PlatformBase):
-
     def name(self) -> str:
         return "cuda"
 
