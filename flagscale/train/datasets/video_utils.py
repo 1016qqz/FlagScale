@@ -122,21 +122,14 @@ def decode_video_frames_torchvision(
     # load all frames until last requested frame
     loaded_frames = []
     loaded_ts = []
-    try:
-        for frame in reader:
-            current_ts = frame["pts"]
-            if log_loaded_timestamps:
-                logging.info(f"frame loaded at timestamp={current_ts:.4f}")
-            loaded_frames.append(frame["data"])
-            loaded_ts.append(current_ts)
-            if current_ts >= last_ts:
-                break
-    except Exception as e:
-        print(
-            f"[WARNING] pyav decode error in {video_path}: {e}, got {len(loaded_frames)} frames so far"
-        )
-        if len(loaded_frames) == 0:
-            raise
+    for frame in reader:
+        current_ts = frame["pts"]
+        if log_loaded_timestamps:
+            logging.info(f"frame loaded at timestamp={current_ts:.4f}")
+        loaded_frames.append(frame["data"])
+        loaded_ts.append(current_ts)
+        if current_ts >= last_ts:
+            break
 
     if backend == "pyav":
         reader.container.close()
