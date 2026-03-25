@@ -66,6 +66,11 @@ def set_seed(seed: int):
     random.seed(seed)
     torch.manual_seed(seed)
     get_platform().manual_seed_all(seed)
+    if get_platform().name() == "cuda":
+        torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = True 
+        torch.backends.cuda.matmul.allow_tf32 = True
 
 
 def init_ddp():
