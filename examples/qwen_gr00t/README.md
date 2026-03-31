@@ -253,7 +253,7 @@ Configure the following fields:
 **Engine settings:**
 - `engine.model_variant` - Model variant (default: `"QwenGr00t"`)
 - `engine.model` - Path to trained checkpoint (e.g., `/workspace/outputs/qwen_gr00t_train/checkpoints/last`)
-- `engine.device` - Device to use (e.g., `"cuda"`)
+- `engine.device` - Device to use (e.g., `"cuda", "musa", "npu"`)
 
 **Generate settings:**
 - `generate.images` - Dictionary mapping image keys to file paths:
