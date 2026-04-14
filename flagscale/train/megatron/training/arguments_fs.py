@@ -15,6 +15,9 @@ except:
     )
 from megatron.plugin.hetero.parallel_context import RankMapper
 
+from megatron.plugin.platform import get_platform
+cur_platform = get_platform()
+
 class FSTrainArguments:
     """Extend the Megatron arguments with FlagScale specific arguments."""
 
@@ -31,7 +34,7 @@ class FSTrainArguments:
         """Initialize torch.distributed and core model parallel."""
         args = self.args
 
-        device_count = torch.cuda.device_count()
+        device_count = cur_platform.device_count()
         if torch.distributed.is_initialized():
 
             if args.rank == 0:
@@ -48,8 +51,8 @@ class FSTrainArguments:
                 print("> initializing torch distributed ...", flush=True)
             # Manually set the device ids.
             if device_count > 0:
-                torch.cuda.set_device(args.local_rank)
-                device_id = torch.device(f"cuda:{args.local_rank}")
+                cur_platform.set_device(args.local_rank)
+                device_id = cur_platform.device(args.local_rank)
             else:
                 device_id = None
 
@@ -762,7 +765,9 @@ def _add_regularization_args(parser):
 
 
 def _add_flagos_args(parser):
-    group = parser.add_argument_group(title="flagscale transformer engine fl")
+    group = parser.add_argument_group(title="flagscale fl")
+    group.add_argument('--mg-fl-prefer', type=str, choices=['cuda', 'musa', 'txda'], default='',
+                       help='Backend selection for megatron fl.')
     group.add_argument('--te-fl-prefer', type=str, choices=['flagos', 'vendor', 'reference'], default='vendor',
                        help='Backend selection for transformer engine fl.')
     group.add_argument('--te-fl-per-op', type=str, default=None,
