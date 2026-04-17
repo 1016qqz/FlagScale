@@ -1,5 +1,4 @@
 from .base_policy import TrainablePolicy
-from .gr00t_n1_5 import Gr00tN15
 from .protocols import ActionModel, VLMBackbone
 from .registry import (
     build_action_model,
@@ -9,11 +8,16 @@ from .registry import (
 )
 from .utils import get_vlm_config
 
+try:
+    from .gr00t_n1_5 import Gr00tN15
+except (ImportError, TypeError):
+    pass
+
 # TODO: (yupu) QwenGr00t and VLM backbones require a newer transformers (Qwen3VLForConditionalGeneration)
 # that is not available in the PI0/PI0.5 conda env. Consolidate into a single env and remove this.
 try:
     from .qwen_gr00t import QwenGr00t
-    from .vlm import Qwen3VLBackbone, Qwen25VLBackbone, QwenVLBackbone
+    from .vlm import Qwen3VLBackbone, Qwen25VLBackbone, Qwen3_5VLBackbone, QwenVLBackbone
 except ImportError:
     pass
 

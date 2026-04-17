@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from flagscale.models.configs.types import NormalizationMode
 from flagscale.models.utils.constants import ACTION
 from flagscale.models.vla.action_model.gr00t_action_header import GR00TActionHeadConfig
+from flagscale.models.vla.action_model.gr00t_action_header_dynamic import GR00TDynamicActionHeadConfig
 from flagscale.models.vla.pretrained_config import PreTrainedConfig
 from flagscale.models.vla.vlm.qwenvl_backbone import QwenVLConfig
 
@@ -17,11 +18,34 @@ logger = getLogger(__name__)
 
 
 @dataclass
+class NFPConfig:
+    """Next Frame Prediction (NFP) head configuration."""
+
+    vl_hidden_dim: int = 2560
+    expand_ratio: int = 4
+    depth: int = 2
+    dropout: float = 0.0
+    vlm_feature_layer: int = -1
+    nfp_loss_mse_weight: float = 0.1
+    nfp_loss_cosine_weight: float = 1.0
+    # Image token ID used to locate image positions in VLM hidden states.
+    # Qwen3-VL uses 151655; Qwen3.5-VL uses 248056.
+    image_token_id: int = 248056
+
+
+@dataclass
 class QwenGr00tConfig(PreTrainedConfig):
     vlm: QwenVLConfig = field(default_factory=QwenVLConfig)
-    action_model: GR00TActionHeadConfig = field(default_factory=GR00TActionHeadConfig)
+    action_model: GR00TActionHeadConfig | GR00TDynamicActionHeadConfig = field(
+        default_factory=GR00TActionHeadConfig
+    )
 
     prompt_template: str | None = None
+
+    # NFP (Next Frame Prediction) head config; None disables NFP.
+    nfp: NFPConfig | None = None
+    # When False, action loss is zeroed out (Stage 1: only NFP + VLM language).
+    use_action_policy_loss: bool = True
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -58,11 +82,34 @@ class QwenGr00tConfig(PreTrainedConfig):
             attn_implementation=vlm_section.get("attn_implementation", None),
         )
 
-        action_model = GR00TActionHeadConfig.from_omegaconf(model_cfg.action_model)
+        # Dispatch action model config based on type field.
+        action_model_section = model_cfg.action_model
+        action_model_type = action_model_section.get("type", "gr00t_action_head")
+        if action_model_type == "gr00t_dynamic_action_head":
+            action_model = GR00TDynamicActionHeadConfig.from_omegaconf(action_model_section)
+        else:
+            action_model = GR00TActionHeadConfig.from_omegaconf(action_model_section)
 
         prompt_template = getattr(model_cfg, "prompt_template", None)
 
         kwargs = dict(vlm=vlm, action_model=action_model, prompt_template=prompt_template)
+
+        # NFP config
+        raw_nfp = getattr(model_cfg, "nfp", None)
+        if raw_nfp is not None:
+            kwargs["nfp"] = NFPConfig(
+                vl_hidden_dim=raw_nfp.get("vl_hidden_dim", 2560),
+                expand_ratio=raw_nfp.get("expand_ratio", 4),
+                depth=raw_nfp.get("depth", 2),
+                dropout=raw_nfp.get("dropout", 0.0),
+                vlm_feature_layer=raw_nfp.get("vlm_feature_layer", -1),
+                nfp_loss_mse_weight=raw_nfp.get("nfp_loss_mse_weight", 0.1),
+                nfp_loss_cosine_weight=raw_nfp.get("nfp_loss_cosine_weight", 1.0),
+                image_token_id=raw_nfp.get("image_token_id", 151655),
+            )
+
+        use_action_policy_loss = getattr(model_cfg, "use_action_policy_loss", True)
+        kwargs["use_action_policy_loss"] = use_action_policy_loss
 
         raw_norm = getattr(model_cfg, "normalization_mapping", None)
         if raw_norm is not None:
@@ -75,7 +122,13 @@ class QwenGr00tConfig(PreTrainedConfig):
         if "vlm" in data and isinstance(data["vlm"], dict):
             data["vlm"] = QwenVLConfig(**data["vlm"])
         if "action_model" in data and isinstance(data["action_model"], dict):
-            data["action_model"] = GR00TActionHeadConfig(**data["action_model"])
+            am_data = data["action_model"]
+            if am_data.get("type") == "gr00t_dynamic_action_head":
+                data["action_model"] = GR00TDynamicActionHeadConfig(**am_data)
+            else:
+                data["action_model"] = GR00TActionHeadConfig(**am_data)
+        if "nfp" in data and isinstance(data["nfp"], dict):
+            data["nfp"] = NFPConfig(**data["nfp"])
         if "normalization_mapping" in data and isinstance(data["normalization_mapping"], dict):
             data["normalization_mapping"] = {
                 k: NormalizationMode(v) for k, v in data["normalization_mapping"].items()

@@ -18,6 +18,11 @@ from transformers import (
     Qwen3VLForConditionalGeneration,
 )
 
+try:
+    from transformers import Qwen3_5ForConditionalGeneration
+except ImportError:
+    Qwen3_5ForConditionalGeneration = None
+
 from flagscale.logger import logger
 from flagscale.models.vla.registry import register_vlm
 from flagscale.platforms.platform_manager import get_platform
@@ -91,14 +96,14 @@ class QwenVLBackbone(nn.Module):
         if isinstance(instructions, str):
             instructions = [instructions]
 
-        logger.info(f"[prepare_input] image_feature_keys={image_feature_keys}")
+        # logger.info(f"[prepare_input] image_feature_keys={image_feature_keys}")
         batch_images: list[list[Image.Image]] | None = None
         for key in image_feature_keys:
             imgs = batch[key]
-            if isinstance(imgs, torch.Tensor):
-                logger.info(
-                    f"[prepare_input] key={key} tensor shape={imgs.shape} dtype={imgs.dtype}"
-                )
+            # if isinstance(imgs, torch.Tensor):
+            #     logger.info(
+            #         f"[prepare_input] key={key} tensor shape={imgs.shape} dtype={imgs.dtype}"
+            #     )
             if isinstance(imgs, torch.Tensor) and imgs.ndim == 3:
                 imgs = [imgs]
             key_images = [_to_pil(img) for img in imgs]
@@ -111,9 +116,9 @@ class QwenVLBackbone(nn.Module):
         for idx, sample_images in enumerate(batch_images):
             batch_images[idx] = [img for img in sample_images if img is not None]
 
-        logger.info(
-            f"[prepare_input] batch_size={len(batch_images)} images_per_sample={[len(s) for s in batch_images]} pil_size={batch_images[0][0].size if batch_images else None}"
-        )
+        # logger.info(
+        #     f"[prepare_input] batch_size={len(batch_images)} images_per_sample={[len(s) for s in batch_images]} pil_size={batch_images[0][0].size if batch_images else None}"
+        # )
         return batch_images, instructions
 
     def build_qwenvl_inputs(
@@ -138,11 +143,79 @@ class QwenVLBackbone(nn.Module):
             messages.append([{"role": "user", "content": content}])
         return messages
 
-    def forward(self, batch: dict[str, torch.Tensor], **kwargs) -> dict[str, torch.Tensor]:
-        logger.info(
-            f"[VLM.forward] input keys={list(batch.keys())} "
-            + " ".join(f"{k}={v.shape}" for k, v in batch.items() if isinstance(v, torch.Tensor))
+    def build_image_embeddings(
+        self,
+        pixel_values: torch.FloatTensor | None = None,
+        image_grid_thw: torch.FloatTensor | None = None,
+        pixel_values_videos: torch.FloatTensor | None = None,
+        video_grid_thw: torch.FloatTensor | None = None,
+        **kwargs,
+    ) -> torch.Tensor | None:
+        """Extract image embeddings from the VLM visual encoder (projected to LLM dim).
+
+        Used as NFP supervision targets — the returned embeddings represent what
+        the NFP head should learn to predict for future frames.
+        """
+        embeds = []
+        hf_model = self.model.model  # inner HF model (e.g. Qwen3VLModel)
+
+        if hasattr(hf_model, "visual"):
+            if pixel_values is not None:
+                img_out = hf_model.visual(hidden_states=pixel_values, grid_thw=image_grid_thw)
+                img_tensor = (
+                    img_out.pooler_output
+                    if hasattr(img_out, "pooler_output")
+                    else (
+                        img_out.last_hidden_state
+                        if hasattr(img_out, "last_hidden_state")
+                        else (img_out[0] if isinstance(img_out, tuple) else img_out)
+                    )
+                )
+                embeds.append(img_tensor)
+
+            if pixel_values_videos is not None:
+                vid_out = hf_model.visual(
+                    hidden_states=pixel_values_videos, grid_thw=video_grid_thw
+                )
+                vid_tensor = (
+                    vid_out.pooler_output
+                    if hasattr(vid_out, "pooler_output")
+                    else (
+                        vid_out.last_hidden_state
+                        if hasattr(vid_out, "last_hidden_state")
+                        else (vid_out[0] if isinstance(vid_out, tuple) else vid_out)
+                    )
+                )
+                embeds.append(vid_tensor)
+
+            return torch.cat(embeds, dim=0) if embeds else None
+
+        # Fallback for models without .visual (e.g. older HF API)
+        raw_embeds = hf_model.get_image_features(pixel_values, image_grid_thw)
+        if hasattr(raw_embeds, "last_hidden_state"):
+            raw_embeds = raw_embeds.last_hidden_state
+        elif isinstance(raw_embeds, tuple):
+            raw_embeds = raw_embeds[0]
+
+        projector = getattr(
+            hf_model, "multi_modal_projector", getattr(hf_model, "vision_language_adapter", None)
         )
+        if projector is not None:
+            try:
+                raw_embeds = projector(raw_embeds)
+            except TypeError:
+                raw_embeds = projector(raw_embeds, grid_thw=image_grid_thw)
+
+        if isinstance(raw_embeds, list):
+            raw_embeds = torch.cat(raw_embeds, dim=0)
+
+        return raw_embeds
+
+    def forward(self, batch: dict[str, torch.Tensor], **kwargs) -> dict[str, torch.Tensor]:
+        # logger.info(
+        #     f"[VLM.forward] input keys={list(batch.keys())} "
+        #     + " ".join(f"{k}={v.shape}" for k, v in batch.items() if isinstance(v, torch.Tensor))
+        # )
         with torch.autocast(get_platform().amp_device_type(), dtype=torch.bfloat16):
             outputs = self.model(
                 **batch,
@@ -150,9 +223,9 @@ class QwenVLBackbone(nn.Module):
                 return_dict=True,
                 **kwargs,
             )
-        logger.info(
-            f"[VLM.forward] hidden_states: {len(outputs.hidden_states)} layers, last={outputs.hidden_states[-1].shape}"
-        )
+        # logger.info(
+        #     f"[VLM.forward] hidden_states: {len(outputs.hidden_states)} layers, last={outputs.hidden_states[-1].shape}"
+        # )
         # TODO: (yupu) We should output the original outputs, not just the hidden states.
         return {"hidden_states": outputs.hidden_states}
 
@@ -255,3 +328,61 @@ class Qwen3VLBackbone(QwenVLBackbone):
         # Use current CUDA device instead of self.model.device, which returns
         # a DTensor device under FSDP2 and causes mixed Tensor/DTensor errors.
         return batch_inputs.to(get_platform().device())
+
+
+@register_vlm("qwen3.5-vl")
+class Qwen3_5VLBackbone(QwenVLBackbone):
+    """Qwen3.5-VL backend (Qwen3_5ForConditionalGeneration)."""
+
+    def __init__(self, vlm_config: QwenVLConfig, prompt_template: str | None = None, **kwargs):
+        if Qwen3_5ForConditionalGeneration is None:
+            raise ImportError(
+                "Qwen3_5ForConditionalGeneration is not available. "
+                "Please upgrade transformers: pip install git+https://github.com/huggingface/transformers.git"
+            )
+        super().__init__(vlm_config, prompt_template, **kwargs)
+        # Qwen3.5 stores hidden_size in text_config; align with top-level config
+        # so that get_vlm_config() can find it.
+        if not hasattr(self.model.config, "hidden_size") or self.model.config.hidden_size is None:
+            self.model.config.hidden_size = self.model.config.text_config.hidden_size
+
+    def _load_model(self, model_id: str):
+        attn_impl = self._attn_implementation or "flash_attention_2"
+        if not self._load_pretrained:
+            hf_config = AutoConfig.from_pretrained(
+                model_id, attn_implementation=attn_impl, torch_dtype=torch.bfloat16
+            )
+            model = Qwen3_5ForConditionalGeneration(hf_config)
+        else:
+            model = Qwen3_5ForConditionalGeneration.from_pretrained(
+                model_id,
+                attn_implementation=attn_impl,
+                torch_dtype=torch.bfloat16,
+            )
+        return model
+
+    def build_qwenvl_inputs(
+        self, images: list[list[Image.Image]], instructions: list[str]
+    ) -> dict[str, torch.Tensor]:
+        from qwen_vl_utils import process_vision_info
+
+        messages = self._build_messages(images, instructions)
+
+        texts = [
+            self.processor.apply_chat_template(m, tokenize=False, add_generation_prompt=True)
+            for m in messages
+        ]
+
+        image_inputs, video_inputs = process_vision_info(messages)
+        batch_input = self.processor(
+            text=texts, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt"
+        )
+
+        # logger.info(
+        #     "[Qwen3_5.build_qwenvl_inputs] "
+        #     + " ".join(
+        #         f"{k}={v.shape}" for k, v in batch_input.items() if isinstance(v, torch.Tensor)
+        #     )
+        # )
+
+        return batch_input.to(get_platform().device())
