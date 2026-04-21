@@ -1,6 +1,6 @@
 system:
-  batch_size: 1
-  train_steps: 1000
+  batch_size: 8
+  train_steps: 125
   log_freq: 1
   grad_clip_norm: 1.0
   use_amp: true
@@ -65,8 +65,8 @@ model:
 
   normalization_mapping:
     VISUAL: IDENTITY
-    STATE: MIN_MAX
-    ACTION: MIN_MAX
+    STATE: IDENTITY
+    ACTION: IDENTITY
 
   optimizer:
     name: AdamW
@@ -84,8 +84,6 @@ model:
       warmup_steps: 5000
       scheduler_kwargs:
         min_lr: 1.0e-06
-      decay_steps: 30000
-      decay_lr: 2.5e-6
 
   # ============================================================
   # Module Freezing Configuration
@@ -105,7 +103,7 @@ data:
     vision_root: ""
     action_key: eepose
     state_key: eepose
-  data_path: /nfs/zhangqq/datasets/lerobot/vla_data/0_30_s_activitynetqa_v21_tmp/
+  data_path: /nfs/zhangqq/datasets/lerobot/0_30_s_academic_v0_1/
   tolerance_s: 0.02
   preprocessor:
     name: policy_preprocessor
@@ -132,16 +130,16 @@ data:
           features: {}
 
   # VLM co-training data (uncomment to enable)
-  # vlm_data:
-  #   vlm_data_root: /nfs/zhangqq/datasets/lerobot/vlm_data
-  #   video_data_root: /nfs/zhangqq/datasets/lerobot/vlm_data
-  #   image_root: /nfs/zhangqq/datasets/lerobot/vlm_data
-  #   dataset_use: activitynetqa_0_30_s
-  #   eval_dataset: activitynetqa_0_30_s
-  #   per_device_batch_size: 1
-  #   model_max_length: 4608
-  #   max_pixels: 307200
-  #   min_pixels: 784
-  #   video_max_frame_pixels: 65536
-  #   video_min_frame_pixels: 784
-  #   base_interval: 2
+  vlm_data:
+    vlm_data_root: /nfs/zhangqq/datasets/lerobot/vlm_data
+    video_data_root: /nfs/zhangqq/datasets/lerobot/vlm_data
+    image_root: /nfs/zhangqq/datasets/lerobot/vlm_data
+    dataset_use: activitynetqa_0_30_s
+    eval_dataset: activitynetqa_0_30_s
+    per_device_batch_size: 1
+    model_max_length: 4608
+    max_pixels: 307200
+    min_pixels: 784
+    video_max_frame_pixels: 65536
+    video_min_frame_pixels: 784
+    base_interval: 2

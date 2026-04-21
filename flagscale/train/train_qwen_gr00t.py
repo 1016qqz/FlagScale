@@ -542,7 +542,7 @@ def update_policy(
 
     train_metrics.loss = loss.item()
     train_metrics.grad_norm = grad_norm.full_tensor().item() if hasattr(grad_norm, 'full_tensor') else grad_norm.item()
-    train_metrics.lr = optimizer.param_groups[0]["lr"]
+    train_metrics.lr = next((g["lr"] for g in optimizer.param_groups if g.get("name") == "vlm"), optimizer.param_groups[0]["lr"])
     train_metrics.update_s = time.perf_counter() - start_time
     if "raw_action_loss" in output and "action_loss" in train_metrics.metrics:
         train_metrics.action_loss = output["raw_action_loss"].item()
@@ -551,7 +551,7 @@ def update_policy(
     if "nfp_cosine_loss_0" in output and "nfp_cosine_loss" in train_metrics.metrics:
         train_metrics.nfp_cosine_loss = output["nfp_cosine_loss_0"].item()
     if "vlm_loss" in output and "vlm_loss" in train_metrics.metrics:
-        train_metrics.vlm_loss = output["vlm_loss"].item()
+        train_metrics.vlm_loss = output["vlm_loss"].item() * vlm_loss_scale
 
     return train_metrics
 
@@ -640,6 +640,7 @@ def main(config: TrainConfig, seed: int):
             rank=rank,
             shuffle=shuffle,
             drop_last=False,
+            seed=seed,
         )
 
         dataloader = torch.utils.data.DataLoader(

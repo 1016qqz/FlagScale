@@ -343,10 +343,8 @@ class DynamicFlowmatchingActionHead(nn.Module):
         pred_actions = pred[:, -actions.shape[1] :]
 
         raw_loss = (pred_actions - velocity) ** 2
-        if mask is not None:
-            loss = (raw_loss * mask.unsqueeze(-1)).sum() / (mask.sum() * raw_loss.shape[-1] + 1e-6)
-        else:
-            loss = raw_loss.mean()
+        # Align with starVLA: always use mean, no mask
+        loss = raw_loss.mean()
         return loss
 
     @torch.no_grad()
