@@ -1,11 +1,11 @@
 system:
-  batch_size: 8
+  batch_size: 1
   train_steps: 125
   log_freq: 1
   grad_clip_norm: 1.0
   use_amp: true
   shuffle: true
-  num_workers: 8
+  num_workers: 4
   vlm_loss_scale: 0.1
 
   checkpoint:
@@ -14,7 +14,7 @@ system:
     save_freq: 200
 
 model:
-  model_name: qwen_gr00t
+  model_name: qwen3_5_gr00t
   vlm:
     type: qwen3.5-vl
     base_vlm: /nfs/zhangqq/models/Qwen/Qwen3_5-4B/
@@ -103,7 +103,7 @@ data:
     vision_root: ""
     action_key: eepose
     state_key: eepose
-  data_path: /nfs/zhangqq/datasets/lerobot/0_30_s_academic_v0_1/
+  data_path: /nfs/zhangqq/datasets/lerobot/vla_data/0_30_s_activitynetqa_v21_tmp/
   tolerance_s: 0.02
   preprocessor:
     name: policy_preprocessor
@@ -136,7 +136,7 @@ data:
     image_root: /nfs/zhangqq/datasets/lerobot/vlm_data
     dataset_use: activitynetqa_0_30_s
     eval_dataset: activitynetqa_0_30_s
-    per_device_batch_size: 1
+    per_device_batch_size: 8
     model_max_length: 4608
     max_pixels: 307200
     min_pixels: 784

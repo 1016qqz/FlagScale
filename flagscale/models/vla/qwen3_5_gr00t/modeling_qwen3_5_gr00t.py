@@ -17,10 +17,12 @@ import dataclasses
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from safetensors.torch import save_file
 
-from .configuration_qwen_gr00t import QwenGr00tConfig
+from .configuration_qwen3_5_gr00t import NFPConfig, Qwen35Gr00tConfig
 from flagscale.logger import logger
+from flagscale.models.vla.action_model.gr00t_action_header_dynamic import GatedMLP
 from flagscale.models.utils.constants import (
     ACTION,
     OBS_STATE,
@@ -34,7 +36,7 @@ from flagscale.models.vla.utils import get_vlm_config
 from flagscale.platforms.platform_manager import get_platform
 
 
-class QwenGr00t(TrainablePolicy):
+class Qwen35Gr00t(TrainablePolicy):
     """
     Multimodal vision-language-action model.
 
@@ -45,7 +47,7 @@ class QwenGr00t(TrainablePolicy):
     Focus: Predict future continuous actions conditioned on images + instruction.
     """
 
-    def __init__(self, config: QwenGr00tConfig):
+    def __init__(self, config: Qwen35Gr00tConfig):
         super().__init__(config)
 
         self.vlm = build_vlm(
@@ -65,10 +67,37 @@ class QwenGr00t(TrainablePolicy):
         self.future_action_window_size = config.action_model.future_action_window_size
         self.use_state = config.action_model.use_state
 
+        # NFP (Next Frame Prediction) head
+        self.nfp_config = config.nfp
+        if self.nfp_config is not None:
+            self.nfp_head = GatedMLP(
+                hidden_dim=self.nfp_config.vl_hidden_dim,
+                expand_ratio=self.nfp_config.expand_ratio,
+                depth=self.nfp_config.depth,
+                dropout=self.nfp_config.dropout,
+            )
+        self.use_action_policy_loss = config.use_action_policy_loss
+
         if config.input_features:
             self.input_features = config.input_features
         if config.output_features:
             self.output_features = config.output_features
+
+    def _nfp_loss(self, nfp_outputs: torch.Tensor, nfp_targets: torch.Tensor):
+        """Compute MSE and cosine embedding loss for NFP head."""
+        if nfp_outputs.numel() == 0 or nfp_targets.numel() == 0:
+            device = nfp_outputs.device
+            zero = torch.tensor(0.0, device=device, requires_grad=True)
+            return zero, zero
+        mse_loss = F.mse_loss(nfp_outputs, nfp_targets, reduction="none").mean(-1)
+        mse_loss = mse_loss.sum() / (nfp_outputs.shape[0] + 1e-12)
+        cosine_loss = F.cosine_embedding_loss(
+            nfp_outputs, nfp_targets,
+            torch.ones(nfp_outputs.size(0), device=nfp_outputs.device),
+            reduction="none",
+        )
+        cosine_loss = cosine_loss.sum() / (nfp_outputs.shape[0] + 1e-12)
+        return mse_loss, cosine_loss
 
     def forward(
         self, batch: list[dict] | dict, vlm_batch: dict[str, torch.Tensor] | None = None
@@ -91,52 +120,65 @@ class QwenGr00t(TrainablePolicy):
 
         qwen_inputs = self.vlm.build_qwenvl_inputs(images, instructions)
 
+        # NFP: build future image embeddings if NFP is enabled
+        nfp_feature = None
+        nfp_losses = {}
+        if self.nfp_config is not None:
+            if isinstance(batch, list):
+                future_images = [ex["all_future_images"] for ex in batch]
+                qwen_future_inputs = self.vlm.build_qwenvl_inputs(future_images, instructions)
+            else:
+                qwen_future_inputs = batch.get("qwen_future_inputs")
+                if qwen_future_inputs is None:
+                    future_images, _ = self.vlm.prepare_input(
+                        batch, image_feature_keys=["future_image"]
+                    )
+                    qwen_future_inputs = self.vlm.build_qwenvl_inputs(future_images, instructions)
+
+            image_mask = qwen_inputs["input_ids"] == self.nfp_config.image_token_id
+            future_image_embeddings = self.vlm.build_image_embeddings(**qwen_future_inputs)
+
         # TODO: (yupu) Hard-coded autocast and dtype, matches starVLA
         with torch.autocast(get_platform().amp_device_type(), dtype=torch.bfloat16):
             vlm_output = self.vlm.forward(qwen_inputs, output_attentions=False)
             # last_hidden_state: [B, seq_len, H]
-            last_hidden = vlm_output["hidden_states"][-1]  # [B, L, H]
+            if self.nfp_config is not None:
+                last_hidden = vlm_output["hidden_states"][1:][self.nfp_config.vlm_feature_layer]
+            else:
+                last_hidden = vlm_output["hidden_states"][-1]  # [B, L, H]
+
+        # NFP forward
+        if self.nfp_config is not None:
+            nfp_input = last_hidden[image_mask]
+            if nfp_input.shape[0] == 0:
+                device = last_hidden.device
+                zero_loss = torch.tensor(0.0, device=device, requires_grad=True)
+                nfp_losses["nfp_mse_loss_0"] = zero_loss
+                nfp_losses["nfp_cosine_loss_0"] = zero_loss
+                B, D = last_hidden.shape[0], last_hidden.shape[-1]
+                nfp_feature = torch.zeros(B, 1, D, device=device, dtype=last_hidden.dtype)
+            else:
+                nfp_outputs = self.nfp_head(nfp_input)
+                mse_loss, cosine_loss = self._nfp_loss(nfp_outputs, future_image_embeddings)
+                nfp_losses["nfp_mse_loss_0"] = mse_loss
+                nfp_losses["nfp_cosine_loss_0"] = cosine_loss
+                nfp_feature = nfp_outputs.reshape(
+                    last_hidden.shape[0], -1, nfp_outputs.shape[-1]
+                ).detach().clone()
 
         target_horizon = self.config.action_model.action_horizon
-        target_dim = self.config.action_model.action_dim
-
-        padded_actions = []
-        action_masks = []
-        for a in actions:
-            a = a.float()
-            T_orig = a.shape[0]
-
-            # 1. Align action dimension (padding or truncating)
-            if a.shape[-1] != target_dim:
-                aligned = torch.zeros(T_orig, target_dim, dtype=a.dtype)
-                copy_dim = min(a.shape[-1], target_dim)
-                aligned[:, :copy_dim] = a[:, :copy_dim]
-                a = aligned
-
-            # 2. Time dimension padding
-            final_a = torch.zeros(target_horizon, target_dim, dtype=a.dtype)
-            mask = torch.zeros(target_horizon, dtype=torch.bool)
-            copy_T = min(T_orig, target_horizon)
-            final_a[:copy_T] = a[:copy_T]
-            mask[:copy_T] = True
-
-            padded_actions.append(final_a)
-            action_masks.append(mask)
 
         with torch.autocast(get_platform().amp_device_type(), dtype=torch.float32):
-            # TODO: (yupu) Is this a bug or a feature? The action dtype would stay as bf16 under this autocast.
-            actions = torch.stack(padded_actions).to(
-                device=last_hidden.device, dtype=last_hidden.dtype
-            )
-            action_masks = torch.stack(action_masks).to(device=last_hidden.device)
+            # Align with starVLA: direct slice, no padding/mask
+            if isinstance(actions, list):
+                actions = torch.stack(actions)
+            actions = actions.to(device=last_hidden.device, dtype=last_hidden.dtype)
+            actions_target = actions[:, -target_horizon:, :]  # (B, action_horizon, action_dim)
 
-            # TODO: (yupu) I believe there is a bug in starVLA, the
-            # `repeated_diffusion_steps` is not properly set in the config.
             repeated_diffusion_steps = self.config.action_model.repeated_diffusion_steps
 
-            actions_repeated = actions.repeat(repeated_diffusion_steps, 1, 1)
+            actions_repeated = actions_target.repeat(repeated_diffusion_steps, 1, 1)
             last_hidden_repeated = last_hidden.repeat(repeated_diffusion_steps, 1, 1)
-            action_masks_repeated = action_masks.repeat(repeated_diffusion_steps, 1)
 
             state_repeated = None
             if state is not None:
@@ -146,15 +188,34 @@ class QwenGr00t(TrainablePolicy):
                 state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)
 
             vlm_output_repeated = {"hidden_states": last_hidden_repeated}
+            if nfp_feature is not None:
+                if nfp_feature.ndim == 4:
+                    nfp_feature_repeated = nfp_feature.repeat(1, repeated_diffusion_steps, 1, 1)
+                else:
+                    nfp_feature_repeated = nfp_feature.repeat(repeated_diffusion_steps, 1, 1)
+                vlm_output_repeated["nfp_feature"] = nfp_feature_repeated
+
             action_input = {
                 "actions": actions_repeated,
                 "state": state_repeated,
-                "mask": action_masks_repeated,
             }
 
             output = self.action_model.forward(vlm_output_repeated, action_input)
 
-        result = {"loss": output["loss"]}
+        # Loss composition
+        if self.nfp_config is not None:
+            action_loss = output["loss"]
+            result = {"raw_action_loss": action_loss}
+            loss = action_loss if self.use_action_policy_loss else torch.tensor(0.0, device=action_loss.device, requires_grad=True)
+            for k, v in nfp_losses.items():
+                result[k] = v
+                if "mse" in k:
+                    loss = loss + self.nfp_config.nfp_loss_mse_weight * v
+                else:
+                    loss = loss + self.nfp_config.nfp_loss_cosine_weight * v
+            result["loss"] = loss
+        else:
+            result = {"loss": output["loss"]}
 
         if vlm_batch is not None:
             with torch.autocast(get_platform().amp_device_type(), dtype=torch.bfloat16):
@@ -198,11 +259,24 @@ class QwenGr00t(TrainablePolicy):
         with torch.autocast(get_platform().amp_device_type(), dtype=torch.bfloat16):
             vlm_output = self.vlm.forward(qwen_inputs, output_attentions=False)
             # last_hidden_state: [B, seq_len, H]
-            last_hidden = vlm_output["hidden_states"][-1]  # [B, L, H]
+            if self.nfp_config is not None:
+                last_hidden = vlm_output["hidden_states"][1:][self.nfp_config.vlm_feature_layer]
+            else:
+                last_hidden = vlm_output["hidden_states"][-1]  # [B, L, H]
 
         logger.info(
             f"[predict_action] last_hidden shape={last_hidden.shape} dtype={last_hidden.dtype}"
         )
+
+        # NFP feature for inference
+        nfp_feature = None
+        if self.nfp_config is not None:
+            image_mask = qwen_inputs["input_ids"] == self.nfp_config.image_token_id
+            nfp_input = last_hidden[image_mask]
+            nfp_outputs = self.nfp_head(nfp_input)
+            nfp_feature = nfp_outputs.reshape(
+                last_hidden.shape[0], -1, nfp_outputs.shape[-1]
+            )
 
         if state is not None:
             state = state.to(device=last_hidden.device, dtype=last_hidden.dtype)
@@ -210,6 +284,8 @@ class QwenGr00t(TrainablePolicy):
         # Step 4: Action Expert Forward
         with torch.autocast(get_platform().amp_device_type(), dtype=torch.float32):
             vlm_output_for_action = {"hidden_states": last_hidden}
+            if nfp_feature is not None:
+                vlm_output_for_action["nfp_feature"] = nfp_feature
             action_input = {"state": state}
             output = self.action_model.predict_action(vlm_output_for_action, action_input)
 
@@ -225,7 +301,7 @@ class QwenGr00t(TrainablePolicy):
         return self.vlm.fsdp_units() + self.action_model.fsdp_units()
 
     def _save_pretrained(self, save_directory: Path, state_dict=None) -> None:
-        """Save QwenGr00t checkpoint: VLM processor + config.json + weights.
+        """Save Qwen35Gr00t checkpoint: VLM processor + config.json + weights.
 
         In addition to the base class artifacts, writes the VLM HF config
         and processor to a ``vlm_config/`` subdirectory so the checkpoint
@@ -264,14 +340,14 @@ class QwenGr00t(TrainablePolicy):
 
     @classmethod
     def from_pretrained(cls, pretrained_path, device="cpu", **kwargs):
-        """Load a QwenGr00t checkpoint.
+        """Load a Qwen35Gr00t checkpoint.
 
         Resolves the relative ``base_vlm`` path stored in ``config.json``
         against the checkpoint directory, then delegates weight loading
         to ``TrainablePolicy.from_pretrained``.
         """
         path = resolve_pretrained_dir(Path(pretrained_path), SAFETENSORS_FILE)
-        config = QwenGr00tConfig.from_pretrained(path)
+        config = Qwen35Gr00tConfig.from_pretrained(path)
 
         # Resolve relative VLM path against checkpoint directory
         if not Path(config.vlm.base_vlm).is_absolute():

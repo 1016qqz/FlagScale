@@ -241,7 +241,7 @@ class ModelConfig(BaseModel):
     @field_validator("model_name")
     @classmethod
     def validate_model_name(cls, v):
-        valid_names = {"pi0", "pi0.5", "qwen_gr00t", "gr00t_n1_5"}
+        valid_names = {"pi0", "pi0.5", "qwen_gr00t", "qwen3_5_gr00t", "gr00t_n1_5"}
         if v not in valid_names:
             raise ValueError(f"Invalid model_name: {v}. Must be one of {valid_names}")
         return v

@@ -3,5 +3,6 @@
 -r ./base.txt
 sentencepiece==0.2.1
 transformers==5.5.0
+flash-linear-attention==0.4.2
 tiktoken==0.12.0
 megatron_core @ https://resource.flagos.net/repository/flagos-pypi-hosted/packages/megatron-core/0.16.0rc0/megatron_core-0.16.0rc0-cp312-cp312-linux_x86_64.whl

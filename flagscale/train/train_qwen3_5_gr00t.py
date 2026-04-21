@@ -26,6 +26,7 @@ from flagscale.train.datasets.lerobot_dataset import (
     LeRobotDataset,
     LeRobotDatasetMetadata,
 )
+from flagscale.train.datasets.video_utils import decode_video_frames
 from flagscale.train.datasets.utils import dataset_to_policy_features
 from flagscale.models.configs.types import FeatureType
 from flagscale.train.processor import PolicyProcessorPipeline
@@ -51,6 +52,89 @@ from flagscale.train.utils.optim_setup import setup_optimizer_and_scheduler
 from flagscale.models.vla import TrainablePolicy
 from flagscale.models.vla.pretrained_config import PreTrainedConfig
 from flagscale.platforms import get_platform
+
+
+class FutureImageDataset(torch.utils.data.Dataset):
+    """Wrapper around LeRobotDataset that fetches future video frames for NFP training.
+
+    For each sample, decodes a future frame at `current_timestamp + future_offset / fps`
+    from the same episode's video file. The future frame is stored under the key
+    ``future_image`` in the returned dict, matching what ``Qwen35Gr00t.forward()`` expects
+    for the lerobot code path.
+
+    If the future timestamp exceeds the episode boundary, the last frame of the
+    episode is used (clamped).
+    """
+
+    def __init__(
+        self,
+        dataset: LeRobotDataset,
+        future_offset: int = 1,
+        image_transforms=None,
+    ):
+        self.dataset = dataset
+        self.future_offset = future_offset
+        self.image_transforms = image_transforms
+
+    def __len__(self):
+        return len(self.dataset)
+
+    @property
+    def num_frames(self):
+        return self.dataset.num_frames
+
+    @property
+    def num_episodes(self):
+        return self.dataset.num_episodes
+
+    @property
+    def meta(self):
+        return self.dataset.meta
+
+    @property
+    def fps(self):
+        return self.dataset.fps
+
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        ep_idx = item["episode_index"].item()
+        current_ts = item["timestamp"].item()
+        fps = self.dataset.fps
+
+        # Compute future timestamp, clamped to episode boundary
+        ep = self.dataset.meta.episodes[ep_idx]
+        ep_end_idx = ep["dataset_to_index"]
+        ep_start_idx = ep["dataset_from_index"]
+        ep_length = ep_end_idx - ep_start_idx
+        # Max timestamp within this episode
+        max_ts = (ep_length - 1) / fps
+        future_ts = min(current_ts + self.future_offset / fps, max_ts)
+
+        # Decode future frame from each camera video
+        future_frames = []
+        for vid_key in self.dataset.meta.video_keys:
+            from_timestamp = ep[f"videos/{vid_key}/from_timestamp"]
+            shifted_ts = [from_timestamp + future_ts]
+            video_path = self.dataset.root / self.dataset.meta.get_video_file_path(ep_idx, vid_key)
+            frames = decode_video_frames(
+                video_path, shifted_ts, self.dataset.tolerance_s, self.dataset.video_backend
+            )
+            frame = frames.squeeze(0)  # [C, H, W] float
+            if self.image_transforms is not None:
+                frame = self.image_transforms(frame)
+                # image_transforms already returns HWC uint8
+            else:
+                # Convert CHW float → HWC uint8 to match observation image format
+                frame = frame.permute(1, 2, 0)  # [H, W, C]
+                frame = (frame * 255).clamp(0, 255).to(torch.uint8)
+            future_frames.append(frame)
+
+        # Use only the first camera's future frame for NFP target.
+        # Multiple cameras are handled via separate observation keys for the
+        # current frame; NFP only needs a single future image embedding.
+        item["future_image"] = future_frames[0]
+
+        return item
 
 
 def set_seed(seed: int):
@@ -96,8 +180,16 @@ def make_dataset(config: TrainConfig, policy_config: PreTrainedConfig):
 
 
     # torchcodec depends on NVIDIA NVDEC which is not available on all platforms (e.g. MUSA);
-    # fall back to pyav for non-CUDA platforms.
-    video_backend = "torchcodec" if get_platform().name() == "cuda" else "pyav"
+    # fall back to pyav for non-CUDA platforms or when torchcodec is broken.
+    video_backend = "pyav"
+    if get_platform().name() == "cuda":
+        try:
+            import torchcodec  # noqa: F401
+            torch.ops.torchcodec_ns  # verify the C++ ops are loadable
+            video_backend = "torchcodec"
+        except Exception:
+            logger.info("torchcodec unavailable, falling back to pyav")
+            video_backend = "pyav"
 
     def _resize_to_uint8_hwc(frame: torch.Tensor) -> torch.Tensor:
         """float32 CHW [0,1] from torchcodec → uint8 HWC 224x224 via PIL resize."""
@@ -124,6 +216,16 @@ def make_dataset(config: TrainConfig, policy_config: PreTrainedConfig):
         video_backend=video_backend,
         tolerance_s=config.data.tolerance_s,
     )
+
+    # Wrap with FutureImageDataset when NFP is enabled
+    future_offset = getattr(config.data, "future_offset", None)
+    if future_offset is not None:
+        logger.info(f"NFP enabled: wrapping dataset with FutureImageDataset (future_offset={future_offset})")
+        dataset = FutureImageDataset(
+            dataset=dataset,
+            future_offset=int(future_offset),
+            image_transforms=image_transforms,
+        )
 
     return dataset
 
@@ -440,10 +542,16 @@ def update_policy(
 
     train_metrics.loss = loss.item()
     train_metrics.grad_norm = grad_norm.full_tensor().item() if hasattr(grad_norm, 'full_tensor') else grad_norm.item()
-    train_metrics.lr = optimizer.param_groups[0]["lr"]
+    train_metrics.lr = next((g["lr"] for g in optimizer.param_groups if g.get("name") == "vlm"), optimizer.param_groups[0]["lr"])
     train_metrics.update_s = time.perf_counter() - start_time
+    if "raw_action_loss" in output and "action_loss" in train_metrics.metrics:
+        train_metrics.action_loss = output["raw_action_loss"].item()
+    if "nfp_mse_loss_0" in output and "nfp_mse_loss" in train_metrics.metrics:
+        train_metrics.nfp_mse_loss = output["nfp_mse_loss_0"].item()
+    if "nfp_cosine_loss_0" in output and "nfp_cosine_loss" in train_metrics.metrics:
+        train_metrics.nfp_cosine_loss = output["nfp_cosine_loss_0"].item()
     if "vlm_loss" in output and "vlm_loss" in train_metrics.metrics:
-        train_metrics.vlm_loss = output["vlm_loss"].item()
+        train_metrics.vlm_loss = output["vlm_loss"].item() * vlm_loss_scale
 
     return train_metrics
 
@@ -463,12 +571,12 @@ def main(config: TrainConfig, seed: int):
 
     if config.data.dataset_type == "wds":
         from megatron.energon import get_train_dataset, get_loader, WorkerConfig
-        from flagscale.models.vla.qwen_gr00t import QwenGr00tConfig
+        from flagscale.models.vla.qwen3_5_gr00t import Qwen35Gr00tConfig
         from flagscale.models.vla.qwen_gr00t.task_encoder_qwen_gr00t import TaskEncoder
 
-        if not isinstance(policy_config, QwenGr00tConfig):
+        if not isinstance(policy_config, Qwen35Gr00tConfig):
             raise ValueError(
-                f"wds dataset_type only supports QwenGr00t, got {type(policy_config).__name__}"
+                f"wds dataset_type only supports Qwen35Gr00t, got {type(policy_config).__name__}"
             )
 
         policy = TrainablePolicy.from_config(policy_config)
@@ -522,7 +630,7 @@ def main(config: TrainConfig, seed: int):
             policy, config.data, dataset_stats=dataset.meta.stats, device=device.type,
         )
 
-        num_workers = 0  # config.system.num_workers
+        num_workers = config.system.num_workers
         shuffle = config.system.shuffle
 
         # DistributedSampler ensures each rank gets different data
@@ -532,6 +640,7 @@ def main(config: TrainConfig, seed: int):
             rank=rank,
             shuffle=shuffle,
             drop_last=False,
+            seed=seed,
         )
 
         dataloader = torch.utils.data.DataLoader(
@@ -550,6 +659,30 @@ def main(config: TrainConfig, seed: int):
         num_frames = dataset.num_frames
         num_episodes = dataset.num_episodes
         vlm_dl_iter = None
+        if getattr(config.data, "vlm_data", None) is not None:
+            # Set data root paths from YAML config before importing qwen_data_config
+            vlm_data_cfg = config.data.vlm_data
+            for env_key, cfg_key in [
+                ("VLM_DATA_ROOT", "vlm_data_root"),
+                ("VLM_VIDEO_ROOT", "video_data_root"),
+                ("VLM_IMAGE_ROOT", "image_root"),
+            ]:
+                val = getattr(vlm_data_cfg, cfg_key, None)
+                if val is not None:
+                    os.environ[env_key] = str(val)
+
+            from flagscale.train.datasets.vlm_datasets_qwen35 import make_vlm_dataloader
+            from types import SimpleNamespace
+
+            vlm_cfg = SimpleNamespace(
+                datasets=SimpleNamespace(vlm_data=config.data.vlm_data),
+                framework=SimpleNamespace(
+                    qwenvl=SimpleNamespace(base_vlm=config.model.vlm.base_vlm)
+                ),
+            )
+            vlm_data_module = make_vlm_dataloader(vlm_cfg)
+            vlm_dl = vlm_data_module["train_dataloader"]
+            vlm_dl_iter = cycle(vlm_dl)
 
     # --- Apply FSDP2 ---
     device_mesh = init_device_mesh(get_platform().name(), (world_size,))
@@ -581,6 +714,9 @@ def main(config: TrainConfig, seed: int):
 
     train_metrics = {
         "loss": AverageMeter("loss", ":.3f"),
+        "action_loss": AverageMeter("act_loss", ":.3f"),
+        "nfp_mse_loss": AverageMeter("nfp_mse", ":.4f"),
+        "nfp_cosine_loss": AverageMeter("nfp_cos", ":.4f"),
         "grad_norm": AverageMeter("grdn", ":.3f"),
         "lr": AverageMeter("lr", ":0.1e"),
         "update_s": AverageMeter("updt_s", ":.3f"),
@@ -618,9 +754,18 @@ def main(config: TrainConfig, seed: int):
             }
 
         vlm_batch = next(vlm_dl_iter) if vlm_dl_iter is not None else None
+        if vlm_batch is not None:
+            vlm_batch = {
+                k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                for k, v in vlm_batch.items()
+            }
 
         if preprocessor is not None:
+            # Preserve keys that preprocessor's batch_to_transition would drop
+            _future_image = batch.pop("future_image", None) if isinstance(batch, dict) else None
             batch = preprocessor(batch)
+            if _future_image is not None:
+                batch["future_image"] = _future_image
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
         train_tracker = update_policy(
@@ -689,7 +834,7 @@ def main(config: TrainConfig, seed: int):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train QwenGr00t model. This script is typically called by the flagscale runner, not directly."
+        description="Train Qwen35Gr00t model. This script is typically called by the flagscale runner, not directly."
     )
     parser.add_argument(
         "--config-file", type=str, required=True, help="Path to the configuration YAML file"

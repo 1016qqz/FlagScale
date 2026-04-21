@@ -22,6 +22,11 @@ except ImportError:
     pass
 
 try:
+    from .qwen3_5_gr00t import Qwen35Gr00t
+except ImportError:
+    pass
+
+try:
     from flagscale.models.pi0.modeling_pi0 import PI0Policy
     from flagscale.models.pi05.modeling_pi05 import PI05Policy
 except ImportError:
@@ -38,9 +43,11 @@ __all__ = [
     "get_vlm_config",
     "Gr00tN15",
     "QwenGr00t",
+    "Qwen35Gr00t",
     "PI0Policy",
     "PI05Policy",
     "QwenVLBackbone",
     "Qwen25VLBackbone",
     "Qwen3VLBackbone",
+    "Qwen3_5VLBackbone",
 ]
